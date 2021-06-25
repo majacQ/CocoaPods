@@ -643,7 +643,13 @@ module Pod
             target.test_specs.each do |test_spec|
               spec_consumer = test_spec.consumer(target.platform)
               test_type = spec_consumer.test_type
+  <<<<<<< pb-xcf-objc
               test_native_target = test_native_target_from_spec(spec_consumer.spec, test_native_targets)
+  =======
+              path = target.xcconfig_path("#{test_type.capitalize}-#{test_spec.name.split('/')[1..-1].join('-')}")
+              update_changed_file(Target::BuildSettings::PodTargetSettings.new(target, spec_consumer), path)
+              test_xcconfig_file_ref = add_file_to_support_group(path)
+  >>>>>>> segiddins/integrate-into-app-hosts
 
               target.user_config_names_by_config_type.each do |config, names|
                 path = target.xcconfig_path("#{test_type.capitalize}-#{target.subspec_label(test_spec)}.#{config}")

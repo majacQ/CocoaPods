@@ -31,10 +31,20 @@ module Pod
           #
           def integrate!
             UI.section(integration_message) do
+  <<<<<<< pb-xcf-objc
               target_installation_result.non_library_specs_by_native_target.each do |native_target, spec|
                 add_embed_frameworks_script_phase(native_target, spec)
                 add_copy_resources_script_phase(native_target, spec)
                 UserProjectIntegrator::TargetIntegrator.create_or_update_user_script_phases(script_phases_for_specs(spec), native_target)
+  =======
+              target_installation_result.test_specs_by_native_target.each do |test_native_target, test_specs|
+                test_specs.each do |test_spec|
+                  next if test_spec.consumer(target.platform).requires_app_host?
+                  add_embed_frameworks_script_phase(test_native_target, test_spec)
+                  add_copy_resources_script_phase(test_native_target, test_spec)
+                end
+                UserProjectIntegrator::TargetIntegrator.create_or_update_user_script_phases(script_phases_for_specs(test_specs), test_native_target)
+  >>>>>>> segiddins/integrate-into-app-hosts
               end
               add_copy_dsyms_script_phase(target_installation_result.native_target)
               add_copy_xcframeworks_script_phase(target_installation_result.native_target)

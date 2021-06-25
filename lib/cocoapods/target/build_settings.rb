@@ -510,7 +510,7 @@ module Pod
 
       # A subclass that generates build settings for a {PodTarget}
       class PodTargetSettings < BuildSettings
-        #-------------------------------------------------------------------------#
+        -------------------------------------------------------------------------#
 
         # @!group Public API
 
@@ -544,7 +544,12 @@ module Pod
         # @return [Specification]
         #   The non-library specification these build settings are for or `nil`.
         #
+  <<<<<<< pb-xcf-objc
         attr_reader :non_library_spec
+  =======
+        attr_reader :test_spec
+        attr_reader :test_spec_consumer
+  >>>>>>> segiddins/integrate-into-app-hosts
 
         # Initializes a new instance
         #
@@ -557,6 +562,7 @@ module Pod
         # @param [Symbol] configuration
         #  see {#configuration}
         #
+ <<<<<<< pb-xcf-objc
         def initialize(target, non_library_spec = nil, configuration: nil)
           super(target)
           if @non_library_spec = non_library_spec
@@ -570,6 +576,13 @@ module Pod
             @library_xcconfig = true
           end
           (@configuration = configuration) || raise("No configuration for #{self}.")
+  =======
+        def initialize(target, test_spec_consumer = nil)
+          super(target)
+          @test_spec_consumer = test_spec_consumer
+          @test_spec = test_spec_consumer ? test_spec_consumer.spec : nil
+          @test_xcconfig = !test_spec_consumer.nil?
+  >>>>>>> segiddins/integrate-into-app-hosts
         end
 
         # @return [Xcodeproj::Xconfig]
@@ -578,7 +591,7 @@ module Pod
           merge_spec_xcconfig_into_xcconfig(merged_pod_target_xcconfigs, xcconfig)
         end
 
-        #-------------------------------------------------------------------------#
+        -------------------------------------------------------------------------#
 
         # @!group Paths
 
@@ -592,7 +605,7 @@ module Pod
           target.pod_target_srcroot
         end
 
-        #-------------------------------------------------------------------------#
+        -------------------------------------------------------------------------#
 
         # @!group Frameworks
 
@@ -626,7 +639,7 @@ module Pod
           frameworks
         end
 
-        # @return [Array<String>]
+         @return [Array<String>]
         define_build_settings_method :static_frameworks_to_import, :memoized => true do
           static_frameworks_to_import = []
           static_frameworks_to_import.concat vendored_static_frameworks.map { |f| File.basename(f, '.framework') } unless target.should_build? && target.build_as_dynamic?
@@ -640,7 +653,7 @@ module Pod
           static_frameworks_to_import
         end
 
-        # @return [Array<String>]
+          @return [Array<String>]
         define_build_settings_method :dynamic_frameworks_to_import, :memoized => true do
           dynamic_frameworks_to_import = vendored_dynamic_frameworks.map { |f| File.basename(f, '.framework') }
           dynamic_frameworks_to_import.concat vendored_xcframeworks.
@@ -652,7 +665,7 @@ module Pod
           dynamic_frameworks_to_import
         end
 
-        # @return [Array<String>]
+          @return [Array<String>]
         define_build_settings_method :weak_frameworks, :memoized => true do
           return [] if target.build_as_static? && library_xcconfig?
 
@@ -740,10 +753,15 @@ module Pod
         # @param [Array<String>] libraries
         #
         # @return [Array<String>]
+  <<<<<<< pb-xcf-objc
         #
         def linker_names_from_libraries(libraries)
           libraries.map { |l| File.basename(l, File.extname(l)).sub(/\Alib/, '') }
         end
+  =======
+        define_build_settings_method :libraries, :memoized => true, :sorted => true, :uniqued => true do
+          return [] if (!target.requires_frameworks? || target.static_framework?) && (!test_spec || test_spec_consumer.requires_app_host?)
+  >>>>>>> segiddins/integrate-into-app-hosts
 
         # @return [Array<String>]
         define_build_settings_method :libraries, :memoized => true, :sorted => true, :uniqued => true do
@@ -796,8 +814,12 @@ module Pod
 
         # @return [Array<String>]
         define_build_settings_method :library_search_paths, :build_setting => true, :memoized => true, :sorted => true, :uniqued => true do
+  <<<<<<< pb-xcf-objc
           library_search_paths = should_apply_xctunwrap_fix? ? ['$(PLATFORM_DIR)/Developer/usr/lib'] : []
           return library_search_paths if library_xcconfig? && target.build_as_static?
+  =======
+          return [] if (!target.requires_frameworks? || target.static_framework?) && (!test_spec || test_spec_consumer.requires_app_host?)
+  >>>>>>> segiddins/integrate-into-app-hosts
 
           library_search_paths.concat library_search_paths_to_import.dup
           library_search_paths.concat dependent_targets.flat_map { |pt| pt.build_settings[@configuration].vendored_dynamic_library_search_paths }
@@ -846,7 +868,7 @@ module Pod
           vendored_library_search_paths << target.configuration_build_dir(CONFIGURATION_BUILD_DIR_VARIABLE)
         end
 
-        #-------------------------------------------------------------------------#
+        -------------------------------------------------------------------------#
 
         # @!group Clang
 

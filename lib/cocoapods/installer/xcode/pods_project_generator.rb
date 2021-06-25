@@ -90,8 +90,14 @@ module Pod
           end
         end
 
+  <<<<<<< pb-xcf-objc
         # @!attribute [Hash{String => TargetInstallationResult}] pod_target_installation_results
         # @!attribute [Hash{String => TargetInstallationResult}] aggregate_target_installation_results
+  =======
+        private
+
+        AppHostKey = Struct.new(:test_type, :platform, :pod_targets)
+  >>>>>>> segiddins/integrate-into-app-hosts
         InstallationResults = Struct.new(:pod_target_installation_results, :aggregate_target_installation_results)
 
         private
@@ -131,7 +137,51 @@ module Pod
               [target.name, target_installer.install!]
             end]
 
+  <<<<<<< pb-xcf-objc
             aggregate_target_installation_results
+  =======
+            InstallationResults.new(pod_target_installation_results, aggregate_target_installation_results)
+          end
+        end
+
+        def install_app_hosts
+          pod_targets_with_app_hosts = pod_targets.reject do |pod_target|
+            pod_target.test_specs.empty? || pod_target.test_spec_consumers.none?(&:requires_app_host?)
+          end
+
+          return if pod_targets_with_app_hosts.empty?
+
+          UI.message '- Installing app hosts' do
+            app_host_keys = pod_targets.flat_map do |pod_target|
+              pod_target.test_spec_consumers.select(&:requires_app_host?).map do |test_spec_consumer|
+                AppHostKey.new(test_spec_consumer.test_type, pod_target.platform, [pod_target])
+              end
+            end.uniq
+
+            app_host_keys_by_test_type = app_host_keys.group_by do |app_host_key|
+              [app_host_key.test_type, app_host_key.platform.symbolic_name]
+            end
+
+            app_host_keys = app_host_keys_by_test_type.map do |(test_type, platform_symbol), keys|
+              deployment_target = keys.map { |k| k.platform.deployment_target }.max
+              platform = Platform.new(platform_symbol, deployment_target)
+              AppHostKey.new(test_type, platform, keys.flat_map(&:pod_targets).uniq)
+            end
+
+            app_host_keys.each_with_object({}) do |app_host_key, app_hosts_by_key|
+              app_host_target = AppHostInstaller.new(sandbox, project, app_host_key.platform, app_host_key.test_type).install!
+              app_hosts_by_key[app_host_key] = app_host_target
+              targets_by_config = analysis_result.all_user_build_configurations.each_with_object({}) do |(name, _type), h|
+                h[name] = app_host_key.pod_targets
+              end
+              at = AggregateTarget.new(sandbox, true, analysis_result.all_user_build_configurations, [], app_host_key.platform,
+                Podfile::TargetDefinition.new("foo-#{app_host_key.platform}", Podfile.new, 'abstract' => false), sandbox.root, project, [app_host_target.uuid], targets_by_config)
+              res = AggregateTargetInstaller.new(sandbox, project, at).install!
+              @target_installation_results.aggregate_target_installation_results[at.name] = res
+              app_host_target.add_dependency(res.native_target)
+              UserProjectIntegrator::TargetIntegrator.new(at).integrate!
+            end
+  >>>>>>> segiddins/integrate-into-app-hosts
           end
         end
 
@@ -190,7 +240,56 @@ module Pod
           AggregateTargetDependencyInstaller.new(sandbox, aggregate_target_installation_results_hash,
                                                  pod_target_installation_results_hash, metadata_cache).install!
 
+  <<<<<<< pb-xcf-objc
           PodTargetDependencyInstaller.new(sandbox, pod_target_installation_results_hash, metadata_cache).install!
+  =======
+          # Wire up pod targets
+          pod_target_installation_results_hash.values.each do |pod_target_installation_result|
+            pod_target = pod_target_installation_result.target
+            native_target = pod_target_installation_result.native_target
+            # First, wire up all resource bundles.
+            pod_target_installation_result.resource_bundle_targets.each do |resource_bundle_target|
+              native_target.add_dependency(resource_bundle_target)
+              if pod_target.requires_frameworks? && pod_target.should_build?
+                native_target.add_resources([resource_bundle_target.product_reference])
+              end
+            end
+            # Wire up all dependencies to this pod target, if any.
+            dependent_targets = pod_target.dependent_targets
+            dependent_targets.each do |dependent_target|
+              native_target.add_dependency(pod_target_installation_results_hash[dependent_target.name].native_target)
+              add_framework_file_reference_to_native_target(native_target, pod_target, dependent_target, frameworks_group)
+            end
+            # Wire up test native targets.
+            unless pod_target_installation_result.test_native_targets.empty?
+              pod_target_installation_result.test_specs_by_native_target.each do |test_native_target, test_specs|
+                test_dependent_targets = test_specs.flat_map { |s| pod_target.test_dependent_targets_by_spec_name[s.name] }.compact.unshift(pod_target).uniq
+                test_dependent_targets.each do |test_dependent_target|
+                  dependency_installation_result = pod_target_installation_results_hash[test_dependent_target.name]
+                  resource_bundle_native_targets = dependency_installation_result.test_resource_bundle_targets[test_specs.first.name]
+                  unless resource_bundle_native_targets.nil?
+                    resource_bundle_native_targets.each do |test_resource_bundle_target|
+                      test_native_target.add_dependency(test_resource_bundle_target)
+                    end
+                  end
+                  test_native_target.add_dependency(dependency_installation_result.native_target)
+                  unless test_specs.all? { |ts| ts.consumer(pod_target.platform).requires_app_host? }
+                    add_framework_file_reference_to_native_target(test_native_target, pod_target, test_dependent_target, frameworks_group)
+                  end
+                  # Wire app host dependencies to test native target
+                  test_spec_consumers = test_specs.map { |test_spec| test_spec.consumer(pod_target.platform) }
+                  test_spec_consumers.select(&:requires_app_host?).each do |test_spec_consumer|
+                    _app_host_key, app_host_target = app_hosts_by_host_key.find do |key, _app_host|
+                      key.test_type == test_spec_consumer.test_type && key.platform.symbolic_name == pod_target.platform.symbolic_name
+                    end
+                    test_native_target.add_dependency(app_host_target)
+                    configure_app_host_to_native_target(app_host_target, test_native_target)
+                  end
+                end
+              end
+            end
+          end
+  >>>>>>> segiddins/integrate-into-app-hosts
         end
 
         # @param  [String] pod The root name of the development pod.

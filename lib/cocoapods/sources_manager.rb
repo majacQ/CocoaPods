@@ -1,4 +1,5 @@
 require 'cocoapods-core/source'
+require 'cocoapods/open-uri'
 require 'netrc'
 require 'set'
 require 'rest'
@@ -70,15 +71,41 @@ module Pod
       #         The URL of the source.
       #
       def cdn_url?(url)
-        if url =~ %r{^https?:\/\/}
-          require 'typhoeus'
+        return unless url =~ %r{^https?:\/\/}
 
-          response = Typhoeus.get(url + '/CocoaPods-version.yml', :netrc_file => Netrc.default_path, :netrc => :optional)
-          response.code == 200 && begin
-            response_hash = YAML.load(response.body) # rubocop:disable Security/YAMLLoad
-            response_hash.is_a?(Hash) && !Source::Metadata.new(response_hash).latest_cocoapods_version.nil?
-          end
-        end
+  <<<<<<< test-open-uri
+        opts = {
+          :redirect => false,
+        }
+
+        info = Netrc.read
+        netrc_host = URI.parse(url).host
+        creds = info[netrc_host]
+        opts[:http_basic_authentication] = creds if creds
+
+        response = OpenURI.open_uri(URI.join(url, 'CocoaPods-version.yml'), opts)
+
+        response_hash = YAML.load(response.read) # rubocop:disable Security/YAMLLoad
+        response_hash.is_a?(Hash) && !Source::Metadata.new(response_hash).latest_cocoapods_version.nil?
+      rescue ::OpenURI::HTTPError
+        return false
+      rescue ::OpenURI::HTTPRedirect
+        return false
+      rescue SocketError
+  =======
+        uri_options = {}
+
+        netrc_info = Netrc.read
+        netrc_host = URI.parse(url).host
+        credentials = netrc_info[netrc_host]
+        uri_options[:http_basic_authentication] = credentials if credentials
+
+        response = OpenURI.open_uri(url.chomp('/') + '/CocoaPods-version.yml', uri_options)
+        response_hash = YAML.load(response.read) # rubocop:disable Security/YAMLLoad
+        response_hash.is_a?(Hash) && !Source::Metadata.new(response_hash).latest_cocoapods_version.nil?
+      rescue ::OpenURI::HTTPError, SocketError
+  >>>>>>> master
+        return false
       rescue => e
         raise Informative, "Couldn't determine repo type for URL: `#{url}`: #{e}"
       end

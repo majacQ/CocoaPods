@@ -12,6 +12,9 @@ jobs:
           - task: SPECS
             os: macos-10.15
             ruby: system
+          - task: SPECS
+            os: macos-11.0
+            ruby: system
           - task: EXAMPLES
             os: macos-10.15
             ruby: system
@@ -20,6 +23,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Set build image var
+        run: echo "ImageVersion=$ImageVersion"  >> $GITHUB_ENV
+
       - name: Checkout git
         uses: actions/checkout@v1
 
@@ -35,9 +41,15 @@ jobs:
       - uses: actions/cache@v2
         with:
           path: vendor/bundle
-          key: ${{ runner.os }}-gems-${{ hashFiles('Gemfile.lock') }}
+  <<<<<<< add-big-sur
+          key: gems@v1-${{ matrix.os }}-Ruby${{ matrix.ruby }}-${{ hashFiles('Gemfile.lock') }}
           restore-keys: |
-            ${{ runner.os }}-gems-
+            gems@v1-${{ matrix.os }}-Ruby${{ matrix.ruby }}-
+  =======
+          key: gems@v1-${{ matrix.os }}-${{ env.ImageVersion }}-Ruby${{ matrix.ruby }}-${{ hashFiles('Gemfile.lock') }}
+          restore-keys: |
+            gems@v1-${{ matrix.os }}-${{ env.ImageVersion }}-Ruby${{ matrix.ruby }}-
+  >>>>>>> master
       - name: Run bundle install
         run: |
           gem install bundler -v "~> 1.17"
@@ -55,16 +67,16 @@ jobs:
 
       - name: Run Tests
         run: bundle exec rake spec:all
-        env: 
+        env:
           COCOAPODS_CI_TASKS: ${{ matrix.task }}
 
 on:
   push:
     branches:
-      - "master"
+      - "*"
       - "*-stable"
   pull_request:
-    branches: 
+    branches:
       - master
       - "*-stable"
 

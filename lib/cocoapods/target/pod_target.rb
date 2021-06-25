@@ -121,18 +121,18 @@ module Pod
     #
     attr_reader :swift_version
 
-    # Initialize a new instance
+      Initialize a new instance
     #
-    # @param [Sandbox] sandbox @see Target#sandbox
-    # @param [BuildType] build_type @see Target#build_type
-    # @param [Hash{String=>Symbol}] user_build_configurations @see Target#user_build_configurations
-    # @param [Array<String>] archs @see Target#archs
-    # @param [Platform] platform @see Target#platform
-    # @param [Array<Specification>] specs @see #specs
-    # @param [Array<TargetDefinition>] target_definitions @see #target_definitions
-    # @param [Array<Sandbox::FileAccessor>] file_accessors @see #file_accessors
-    # @param [String] scope_suffix @see #scope_suffix
-    # @param [String] swift_version @see #swift_version
+      @param [Sandbox] sandbox @see Target#sandbox
+      @param [BuildType] build_type @see Target#build_type
+      @param [Hash{String=>Symbol}] user_build_configurations @see Target#user_build_configurations
+      @param [Array<String>] archs @see Target#archs
+      @param [Platform] platform @see Target#platform
+      @param [Array<Specification>] specs @see #specs
+      @param [Array<TargetDefinition>] target_definitions @see #target_definitions
+      @param [Array<Sandbox::FileAccessor>] file_accessors @see #file_accessors
+      @param [String] scope_suffix @see #scope_suffix
+      @param [String] swift_version @see #swift_version
     #
     def initialize(sandbox, build_type, user_build_configurations, archs, platform, specs, target_definitions,
                    file_accessors = [], scope_suffix = nil, swift_version = nil)
@@ -159,12 +159,12 @@ module Pod
       @app_spec_build_settings_by_config = create_app_build_settings_by_config
     end
 
-    # Scopes the current target based on the existing pod targets within the cache.
+      Scopes the current target based on the existing pod targets within the cache.
     #
-    # @param [Hash{Array => PodTarget}] cache
+      @param [Hash{Array => PodTarget}] cache
     #        the cached target for a previously scoped target.
     #
-    # @return [Array<PodTarget>] a scoped copy for each target definition.
+      @return [Array<PodTarget>] a scoped copy for each target definition.
     #
     def scoped(cache = {})
       target_definitions.map do |target_definition|
@@ -193,7 +193,7 @@ module Pod
       end
     end
 
-    # @return [String] the label for the target.
+      @return [String] the label for the target.
     #
     def label
       if scope_suffix.nil? || scope_suffix[0] == '.'
@@ -203,57 +203,57 @@ module Pod
       end
     end
 
-    # @return [Array<FileAccessor>] The list of all files tracked.
+      @return [Array<String>] The list of all files tracked.
     #
     def all_files
       Sandbox::FileAccessor.all_files(file_accessors)
     end
 
-    # @return [Pathname] the pathname for headers in the sandbox.
+      @return [Pathname] the pathname for headers in the sandbox.
     #
     def headers_sandbox
       Pathname.new(pod_name)
     end
 
-    # @return [Hash{FileAccessor => Hash}] Hash of file accessors by header mappings.
+      @return [Hash{FileAccessor => Hash}] Hash of file accessors by header mappings.
     #
     def header_mappings_by_file_accessor
       valid_accessors = file_accessors.reject { |fa| fa.spec.non_library_specification? }
       Hash[valid_accessors.map do |file_accessor|
-        # Private headers will always end up in Pods/Headers/Private/PodA/*.h
-        # This will allow for `""` imports to work.
+          Private headers will always end up in Pods/Headers/Private/PodA/*.h
+          This will allow for `""` imports to work.
         [file_accessor, header_mappings(file_accessor, file_accessor.headers)]
       end]
     end
 
-    # @return [Hash{FileAccessor => Hash}] Hash of file accessors by public header mappings.
+      @return [Hash{FileAccessor => Hash}] Hash of file accessors by public header mappings.
     #
     def public_header_mappings_by_file_accessor
       valid_accessors = file_accessors.reject { |fa| fa.spec.non_library_specification? }
       Hash[valid_accessors.map do |file_accessor|
-        # Public headers on the other hand will be added in Pods/Headers/Public/PodA/PodA/*.h
-        # The extra folder is intentional in order for `<>` imports to work.
+          Public headers on the other hand will be added in Pods/Headers/Public/PodA/PodA/*.h
+          The extra folder is intentional in order for `<>` imports to work.
         [file_accessor, header_mappings(file_accessor, file_accessor.public_headers)]
       end]
     end
 
-    # @return [Array<Version>] the Swift versions supported. Might be empty if the author has not
+      @return [Array<Version>] the Swift versions supported. Might be empty if the author has not
     #         specified any versions, most likely due to legacy reasons.
     #
     def spec_swift_versions
       root_spec.swift_versions
     end
 
-    # @return [Podfile] The podfile which declares the dependency.
+      @return [Podfile] The podfile which declares the dependency.
     #
     def podfile
       target_definitions.first.podfile
     end
 
-    # @return [String] the project name derived from the target definitions that integrate this pod. If none is
+      @return [String] the project name derived from the target definitions that integrate this pod. If none is
     #         specified then the name of the pod is used by default.
     #
-    # @note   The name is guaranteed to be the same across all target definitions and is validated by the target
+      @note   The name is guaranteed to be the same across all target definitions and is validated by the target
     #         validator during installation.
     #
     def project_name
@@ -270,6 +270,7 @@ module Pod
 
     # @param [Specification] spec the specification
     #
+  <<<<<<< amorde/scheme-gen-fix
     # @return [String] the product name of the specification's target
     def product_name_for_spec(spec)
       case spec.spec_type
@@ -291,6 +292,23 @@ module Pod
       bundle_label.gsub("#{label}-", '')
     end
 
+  =======
+    # @return [String] the product basename of the specification's target
+    def product_basename_for_spec(spec)
+      user_specified = build_settings_by_config_for_spec(spec).
+                       each_value.
+                       map { |settings| settings.merged_pod_target_xcconfigs['PRODUCT_NAME'] }.
+                       compact.
+                       uniq
+
+      if user_specified.size == 1
+        user_specified.first
+      else
+        spec_label(spec)
+      end
+    end
+
+  >>>>>>> master
     # @return [Bool] Whether or not this target should be built.
     #
     # A target should not be built if it has no source files.
@@ -482,7 +500,7 @@ module Pod
           prefix = Pod::Target::BuildSettings::CONFIGURATION_BUILD_DIR_VARIABLE
           prefix = configuration_build_dir unless file_accessor.spec.test_specification?
           resource_bundle_paths = file_accessor.resource_bundles.keys.map { |name| "#{prefix}/#{name.shellescape}.bundle" }
-          hash[file_accessor.spec.name] = resource_paths + resource_bundle_paths
+          hash[file_accessor.spec.name] = (resource_paths + resource_bundle_paths).map(&:to_s)
         end
       end
     end
@@ -539,7 +557,7 @@ module Pod
     # @return [Specification] The root specification for the target.
     #
     def root_spec
-      specs.first.root
+      @root_spec ||= specs.first.root
     end
 
     # @return [String] The name of the Pod that this target refers to.
@@ -646,13 +664,16 @@ module Pod
       end
     end
 
-    def non_library_spec_label(spec)
+    def spec_label(spec)
       case spec.spec_type
+      when :library then label
       when :test then test_target_label(spec)
       when :app then app_target_label(spec)
       else raise ArgumentError, "Unhandled spec type #{spec.spec_type.inspect} for #{spec.inspect}"
       end
     end
+    # for backwards compatibility
+    alias non_library_spec_label spec_label
 
     # @param  [Specification] spec
     #         The spec to return scheme configuration for.
@@ -672,7 +693,7 @@ module Pod
     # @return [Pathname] The absolute path of the copy resources script for the given spec.
     #
     def copy_resources_script_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-resources.sh"
+      support_files_dir + "#{spec_label(spec)}-resources.sh"
     end
 
     # @param  [Specification] spec
@@ -681,7 +702,7 @@ module Pod
     # @return [Pathname] The absolute path of the copy resources script input file list for the given spec.
     #
     def copy_resources_script_input_files_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-resources-input-files.xcfilelist"
+      support_files_dir + "#{spec_label(spec)}-resources-input-files.xcfilelist"
     end
 
     # @param  [Specification] spec
@@ -690,7 +711,7 @@ module Pod
     # @return [Pathname] The absolute path of the copy resources script output file list for the given spec.
     #
     def copy_resources_script_output_files_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-resources-output-files.xcfilelist"
+      support_files_dir + "#{spec_label(spec)}-resources-output-files.xcfilelist"
     end
 
     # @param  [Specification] spec
@@ -699,7 +720,7 @@ module Pod
     # @return [Pathname] The absolute path of the embed frameworks script for the given spec.
     #
     def embed_frameworks_script_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-frameworks.sh"
+      support_files_dir + "#{spec_label(spec)}-frameworks.sh"
     end
 
     # @param  [Specification] spec
@@ -708,7 +729,7 @@ module Pod
     # @return [Pathname] The absolute path of the embed frameworks script input file list for the given spec.
     #
     def embed_frameworks_script_input_files_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-frameworks-input-files.xcfilelist"
+      support_files_dir + "#{spec_label(spec)}-frameworks-input-files.xcfilelist"
     end
 
     # @param  [Specification] spec
@@ -717,7 +738,7 @@ module Pod
     # @return [Pathname] The absolute path of the embed frameworks script output file list for the given spec.
     #
     def embed_frameworks_script_output_files_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-frameworks-output-files.xcfilelist"
+      support_files_dir + "#{spec_label(spec)}-frameworks-output-files.xcfilelist"
     end
 
     # @return [Pathname] The absolute path of the copy xcframeworks script.
@@ -748,7 +769,7 @@ module Pod
     # @todo Remove in 2.0
     #
     def prepare_artifacts_script_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-artifacts.sh"
+      support_files_dir + "#{spec_label(spec)}-artifacts.sh"
     end
 
     # @param  [Specification] spec
@@ -761,7 +782,7 @@ module Pod
     # @todo Remove in 2.0
     #
     def prepare_artifacts_script_input_files_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-artifacts-input-files.xcfilelist"
+      support_files_dir + "#{spec_label(spec)}-artifacts-input-files.xcfilelist"
     end
 
     # @param  [Specification] spec
@@ -774,7 +795,7 @@ module Pod
     # @todo Remove in 2.0
     #
     def prepare_artifacts_script_output_files_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-artifacts-output-files.xcfilelist"
+      support_files_dir + "#{spec_label(spec)}-artifacts-output-files.xcfilelist"
     end
 
     # @return [Pathname] The absolute path of the copy dSYMs script.
@@ -801,7 +822,7 @@ module Pod
     # @return [Pathname] The absolute path of the Info.plist for the given spec.
     #
     def info_plist_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-Info.plist"
+      support_files_dir + "#{spec_label(spec)}-Info.plist"
     end
 
     # @param  [Specification] spec
@@ -810,7 +831,7 @@ module Pod
     # @return [Pathname] the absolute path of the prefix header file for the given spec.
     #
     def prefix_header_path_for_spec(spec)
-      support_files_dir + "#{non_library_spec_label(spec)}-prefix.pch"
+      support_files_dir + "#{spec_label(spec)}-prefix.pch"
     end
 
     # @return [Array<String>] The names of the Pods on which this target
@@ -1081,7 +1102,8 @@ module Pod
     #
     def uses_modular_headers?(only_if_defines_modules = true)
       return false if only_if_defines_modules && !defines_module?
-      spec_consumers.none?(&:header_mappings_dir) && spec_consumers.none?(&:header_dir)
+      return @uses_modular_headers if defined? @uses_modular_headers
+      @uses_modular_headers = spec_consumers.none?(&:header_mappings_dir) && spec_consumers.none?(&:header_dir)
     end
 
     private

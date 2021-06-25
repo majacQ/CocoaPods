@@ -469,13 +469,21 @@ module Pod
               resources = target.file_accessors.find { |fa| fa.spec == app_spec }.resources
               add_launchscreen_storyboard = resources.none? { |resource| resource.basename.to_s == 'LaunchScreen.storyboard' } && platform.name == :ios
               embedded_content_contains_swift = target.dependent_targets_for_app_spec(app_spec).any?(&:uses_swift?)
+
+              product_name = target.product_name_for_spec(app_spec)
               app_native_target = AppHostInstaller.new(sandbox, project, platform, subspec_name, spec_name,
                                                        app_target_label, :add_main => false,
+  <<<<<<< amorde/scheme-gen-fix
+                                                       :add_launchscreen_storyboard => add_launchscreen_storyboard,
+                                                       :info_plist_entries => info_plist_entries,
+                                                       :product_name => product_name).install!
+  =======
                                                                          :add_launchscreen_storyboard => add_launchscreen_storyboard,
                                                                          :info_plist_entries => info_plist_entries,
                                                                          :product_basename => target.product_basename_for_spec(app_spec)).install!
+  >>>>>>> master
 
-              app_native_target.product_reference.name = app_target_label
+              app_native_target.product_reference.name = app_target_label if product_name != app_target_label
               target.user_build_configurations.each do |bc_name, type|
                 app_native_target.add_build_configuration(bc_name, type)
               end
@@ -489,11 +497,11 @@ module Pod
                 # target_installer will automatically set the product name to the module name if the target
                 # requires frameworks. For apps we always use the app target name as the product name
                 # irrelevant to whether we use frameworks or not.
-                configuration.build_settings['PRODUCT_NAME'] = app_target_label
+                configuration.build_settings['PRODUCT_NAME'] = product_name
                 # target_installer sets 'MACH_O_TYPE' for static frameworks ensure this does not propagate
                 # to app target.
                 configuration.build_settings.delete('MACH_O_TYPE')
-                # Use xcode default product module name, which is $(PRODUCT_NAME:c99extidentifier)
+                Use xcode default product module name, which is $(PRODUCT_NAME:c99extidentifier)
                 # this gives us always valid name that is distinct from the parent spec module name
                 # which allow the app to use import to access the parent framework
                 configuration.build_settings.delete('PRODUCT_MODULE_NAME')
@@ -519,6 +527,10 @@ module Pod
 
               remove_pod_target_xcconfig_overrides_from_target(target.app_spec_build_settings_by_config[app_spec.name], app_native_target)
 
+              if (product_name = target.app_spec_build_settings_by_config[app_spec.name]['PRODUCT_NAME']) && !product_name.empty?
+              app_native_target.product_reference.name = product_name
+              end
+
               create_app_target_embed_frameworks_script(app_spec)
               create_app_target_copy_resources_script(app_spec)
               add_resources_to_target(resources, app_native_target)
@@ -529,11 +541,11 @@ module Pod
 
           # Adds the resources to the compile resources phase of the target.
           #
-          # @param  [Array<Pathname>] paths the paths to add to the target.
+          @param  [Array<Pathname>] paths the paths to add to the target.
           #
-          # @param  [PBXNativeTarget] target the target resources are added to.
+          @param  [PBXNativeTarget] target the target resources are added to.
           #
-          # @return [Boolean] whether any compile phase references were added.
+          @return [Boolean] whether any compile phase references were added.
           #
           def add_resources_to_target(paths, target)
             filter_resource_file_references(paths) do |compile_phase_refs, resource_phase_refs|
@@ -546,13 +558,13 @@ module Pod
 
           # Adds the resources of the Pods to the Pods project.
           #
-          # @note   The source files are grouped by Pod and in turn by subspec
-          #         (recursively) in the resources group.
+          @note   The source files are grouped by Pod and in turn by subspec
+                  (recursively) in the resources group.
           #
-          # @param  [Array<Sandbox::FileAccessor>] file_accessors
+          @param  [Array<Sandbox::FileAccessor>] file_accessors
           #         the file accessors list to generate resource bundles for.
           #
-          # @return [Hash{String=>Array<PBXNativeTarget>}] the resource bundle native targets created.
+          @return [Hash{String=>Array<PBXNativeTarget>}] the resource bundle native targets created.
           #
           def add_resources_bundle_targets(file_accessors)
             file_accessors.each_with_object({}) do |file_accessor, hash|
@@ -570,7 +582,7 @@ module Pod
                                                            else
                                                              deployment_target
                                                            end
-                # Create Info.plist file for bundle
+                Create Info.plist file for bundle
                 path = target.info_plist_path
                 path.dirname.mkdir unless path.dirname.exist?
                 info_plist_path = path.dirname + "ResourceBundle-#{bundle_name}-#{path.basename}"
@@ -578,24 +590,24 @@ module Pod
 
                 resource_bundle_target.build_configurations.each do |configuration|
                   configuration.build_settings['PRODUCT_NAME'] = bundle_name
-                  # Do not set the CONFIGURATION_BUILD_DIR for resource bundles that are only meant for test targets.
+                  Do not set the CONFIGURATION_BUILD_DIR for resource bundles that are only meant for test targets.
                   # This is because the test target itself also does not set this configuration build dir and it expects
                   # all bundles to be copied from the default path.
                   unless file_accessor.spec.test_specification?
                     configuration.build_settings['CONFIGURATION_BUILD_DIR'] = target.configuration_build_dir('$(BUILD_DIR)/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)')
                   end
 
-                  # Set the 'IBSC_MODULE' build settings for resource bundles so that Storyboards and Xibs can load
-                  # classes from the parent module.
+                  Set the 'IBSC_MODULE' build settings for resource bundles so that Storyboards and Xibs can load
+                  classes from the parent module.
                   configuration.build_settings['IBSC_MODULE'] = target.product_module_name
 
-                  # Set the `SWIFT_VERSION` build setting for resource bundles that could have resources that get
-                  # compiled such as an `xcdatamodeld` file which has 'Swift' as its code generation language.
+                  Set the `SWIFT_VERSION` build setting for resource bundles that could have resources that get
+                  compiled such as an `xcdatamodeld` file which has 'Swift' as its code generation language.
                   if contains_compile_phase_refs && file_accessors.any? { |fa| target.uses_swift_for_spec?(fa.spec) }
                     configuration.build_settings['SWIFT_VERSION'] = target.swift_version
                   end
 
-                  # Set the correct device family for this bundle, based on the platform
+                  Set the correct device family for this bundle, based on the platform
                   device_family_by_platform = {
                     :ios => '1,2',
                     :tvos => '3',
@@ -614,15 +626,15 @@ module Pod
             end
           end
 
-          # Generates the contents of the xcconfig file and saves it to disk.
+          Generates the contents of the xcconfig file and saves it to disk.
           #
-          # @param  [PBXNativeTarget] native_target
-          #         the native target to link the xcconfig file into.
+          @param  [PBXNativeTarget] native_target
+                  the native target to link the xcconfig file into.
           #
-          # @param  [Array<PBXNativeTarget>] resource_bundle_targets
-          #         the additional resource bundle targets to link the xcconfig file into.
+            @param  [Array<PBXNativeTarget>] resource_bundle_targets
+                    the additional resource bundle targets to link the xcconfig file into.
           #
-          # @return [void]
+          @return [void]
           #
           def create_xcconfig_file(native_target, resource_bundle_targets)
             target.user_config_names_by_config_type.each do |config, names|
@@ -630,20 +642,20 @@ module Pod
               update_changed_file(target.build_settings[config], path)
               xcconfig_file_ref = add_file_to_support_group(path)
 
-              # also apply the private config to resource bundle targets.
+              also apply the private config to resource bundle targets.
               apply_xcconfig_file_ref_to_targets([native_target] + resource_bundle_targets, xcconfig_file_ref, names)
             end
           end
 
-          # Generates the contents of the xcconfig file used for each test target type and saves it to disk.
+            Generates the contents of the xcconfig file used for each test target type and saves it to disk.
           #
-          # @param  [Array<PBXNativeTarget>] test_native_targets
-          #         the test native target to link the xcconfig file into.
+            @param  [Array<PBXNativeTarget>] test_native_targets
+                    the test native target to link the xcconfig file into.
           #
-          # @param  [Hash{String=>Array<PBXNativeTarget>}] test_resource_bundle_targets
+            @param  [Hash{String=>Array<PBXNativeTarget>}] test_resource_bundle_targets
           #         the additional test resource bundle targets to link the xcconfig file into.
           #
-          # @return [void]
+            @return [void]
           #
           def create_test_xcconfig_files(test_native_targets, test_resource_bundle_targets)
             target.test_specs.each do |test_spec|
@@ -657,19 +669,20 @@ module Pod
                 update_changed_file(test_spec_build_settings, path)
                 test_xcconfig_file_ref = add_file_to_support_group(path)
 
-                # also apply the private config to resource bundle test targets related to this test spec.
+                also apply the private config to resource bundle test targets related to this test spec.
                 scoped_test_resource_bundle_targets = test_resource_bundle_targets[test_spec.name]
                 apply_xcconfig_file_ref_to_targets([test_native_target] + scoped_test_resource_bundle_targets, test_xcconfig_file_ref, names)
               end
             end
           end
 
-          # Creates a script that copies the resources to the bundle of the test target.
+            Creates a script that copies the resources to the bundle of the test target.
           #
-          # @param [Specification] test_spec
+          #
+             @param [Specification] test_spec
           #        The test spec to create the copy resources script for.
           #
-          # @return [void]
+            @return [void]
           #
           def create_test_target_copy_resources_script(test_spec)
             path = target.copy_resources_script_path_for_spec(test_spec)
@@ -691,12 +704,12 @@ module Pod
             end
           end
 
-          # Creates a script that embeds the frameworks to the bundle of the test target.
+            Creates a script that embeds the frameworks to the bundle of the test target.
           #
-          # @param [Specification] test_spec
+            @param [Specification] test_spec
           #        The test spec to create the embed frameworks script for.
           #
-          # @return [void]
+            @return [void]
           #
           def create_test_target_embed_frameworks_script(test_spec)
             path = target.embed_frameworks_script_path_for_spec(test_spec)
@@ -726,15 +739,15 @@ module Pod
             end
           end
 
-          # Generates the contents of the xcconfig file used for each app target type and saves it to disk.
+            Generates the contents of the xcconfig file used for each app target type and saves it to disk.
           #
-          # @param  [Hash{Specification => PBXNativeTarget}] app_native_targets
+            @param  [Hash{Specification => PBXNativeTarget}] app_native_targets
           #         the app native targets to link the xcconfig file into.
           #
-          # @param  [Hash{String=>Array<PBXNativeTarget>}] app_resource_bundle_targets
+            @param  [Hash{String=>Array<PBXNativeTarget>}] app_resource_bundle_targets
           #         the additional app resource bundle targets to link the xcconfig file into.
           #
-          # @return [void]
+            @return [void]
           #
           def create_app_xcconfig_files(app_native_targets, app_resource_bundle_targets)
             target.app_specs.each do |app_spec|
@@ -747,19 +760,19 @@ module Pod
                 update_changed_file(app_spec_build_settings, path)
                 app_xcconfig_file_ref = add_file_to_support_group(path)
 
-                # also apply the private config to resource bundle app targets related to this app spec.
+                  also apply the private config to resource bundle app targets related to this app spec.
                 scoped_app_resource_bundle_targets = app_resource_bundle_targets[app_spec.name]
                 apply_xcconfig_file_ref_to_targets([app_native_target] + scoped_app_resource_bundle_targets, app_xcconfig_file_ref, names)
               end
             end
           end
 
-          # Creates a script that copies the resources to the bundle of the app target.
+            Creates a script that copies the resources to the bundle of the app target.
           #
-          # @param [Specification] app_spec
+            @param [Specification] app_spec
           #        The app spec to create the copy resources script for.
           #
-          # @return [void]
+            @return [void]
           #
           def create_app_target_copy_resources_script(app_spec)
             path = target.copy_resources_script_path_for_spec(app_spec)
@@ -778,12 +791,12 @@ module Pod
             end
           end
 
-          # Creates a script that embeds the frameworks to the bundle of the app target.
+            Creates a script that embeds the frameworks to the bundle of the app target.
           #
-          # @param [Specification] app_spec
+            @param [Specification] app_spec
           #        The app spec to create the embed frameworks script for.
           #
-          # @return [void]
+            @return [void]
           #
           def create_app_target_embed_frameworks_script(app_spec)
             path = target.embed_frameworks_script_path_for_spec(app_spec)
@@ -809,9 +822,9 @@ module Pod
             end
           end
 
-          # Creates a script that copies and strips vendored dSYMs and bcsymbolmaps.
+            Creates a script that copies and strips vendored dSYMs and bcsymbolmaps.
           #
-          # @return [void]
+            @return [void]
           #
           def create_copy_dsyms_script
             dsym_paths = PodTargetInstaller.dsym_paths(target)
@@ -824,13 +837,13 @@ module Pod
             end
           end
 
-          # Creates a script that copies the appropriate xcframework slice to the build dir.
+            Creates a script that copies the appropriate xcframework slice to the build dir.
           #
           # @note   We can't use Xcode default link libraries phase, because
           #         we need to ensure that we only copy the frameworks which are
           #         relevant for the current build configuration.
           #
-          # @return [void]
+          N @return [void]
           #
           def create_copy_xcframeworks_script
             path = target.copy_xcframeworks_script_path
@@ -839,17 +852,17 @@ module Pod
             add_file_to_support_group(path)
           end
 
-          # Creates a build phase which links the versioned header folders
-          # of the OS X into the framework bundle's root root directory.
-          # This is only necessary because the way how headers are copied
-          # via custom copy file build phases in combination with
-          # header_mappings_dir interferes with xcodebuild's expectations
-          # about the existence of private or public headers.
+            Creates a build phase which links the versioned header folders
+            of the OS X into the framework bundle's root root directory.
+            This is only necessary because the way how headers are copied
+            via custom copy file build phases in combination with
+            header_mappings_dir interferes with xcodebuild's expectations
+            about the existence of private or public headers.
           #
-          # @param  [PBXNativeTarget] native_target
+            @param  [PBXNativeTarget] native_target
           #         the native target to add the script phase into.
           #
-          # @return [void]
+            @return [void]
           #
           def create_build_phase_to_symlink_header_folders(native_target)
             return unless target.platform.name == :osx && any_header_mapping_dirs?
@@ -877,46 +890,46 @@ module Pod
             :tvos => Version.new('9.0'),
           }.freeze
 
-          # Returns the compiler flags for the source files of the given specification.
+            Returns the compiler flags for the source files of the given specification.
           #
-          # The following behavior is regarding the `OS_OBJECT_USE_OBJC` flag. When
-          # set to `0`, it will allow code to use `dispatch_release()` on >= iOS 6.0
-          # and OS X 10.8.
+            The following behavior is regarding the `OS_OBJECT_USE_OBJC` flag. When
+            set to `0`, it will allow code to use `dispatch_release()` on >= iOS 6.0
+            and OS X 10.8.
           #
-          # * New libraries that do *not* require ARC don’t need to care about this
+            * New libraries that do *not* require ARC don’t need to care about this
           #   issue at all.
           #
-          # * New libraries that *do* require ARC _and_ have a deployment target of
-          #   >= iOS 6.0 or OS X 10.8:
+            * New libraries that *do* require ARC _and_ have a deployment target of
+              >= iOS 6.0 or OS X 10.8:
           #
-          #   These no longer use `dispatch_release()` and should *not* have the
-          #   `OS_OBJECT_USE_OBJC` flag set to `0`.
+              These no longer use `dispatch_release()` and should *not* have the
+              `OS_OBJECT_USE_OBJC` flag set to `0`.
           #
           #   **Note:** this means that these libraries *have* to specify the
           #             deployment target in order to function well.
           #
-          # * New libraries that *do* require ARC, but have a deployment target of
-          #   < iOS 6.0 or OS X 10.8:
+            * New libraries that *do* require ARC, but have a deployment target of
+              < iOS 6.0 or OS X 10.8:
           #
-          #   These contain `dispatch_release()` calls and as such need the
-          #   `OS_OBJECT_USE_OBJC` flag set to `1`.
+              These contain `dispatch_release()` calls and as such need the
+              `OS_OBJECT_USE_OBJC` flag set to `1`.
           #
-          #   **Note:** libraries that do *not* specify a platform version are
-          #             assumed to have a deployment target of < iOS 6.0 or OS X 10.8.
+              **Note:** libraries that do *not* specify a platform version are
+                        assumed to have a deployment target of < iOS 6.0 or OS X 10.8.
           #
-          #  For more information, see: https://opensource.apple.com/source/libdispatch/libdispatch-228.18/os/object.h
+             For more information, see: https://opensource.apple.com/source/libdispatch/libdispatch-228.18/os/object.h
           #
-          # @param  [Specification::Consumer] consumer
+            @param  [Specification::Consumer] consumer
           #         The consumer for the specification for which the compiler flags
           #         are needed.
           #
-          # @param  [Boolean] arc
+            @param  [Boolean] arc
           #         Whether the arc is enabled or not.
           #
-          # @param  [Symbol] language
-          #         The language these compiler warnings are for. Can be either :objc or :swift.
+            @param  [Symbol] language
+                    The language these compiler warnings are for. Can be either :objc or :swift.
           #
-          # @return [String] The compiler flags.
+            @return [String] The compiler flags.
           #
           def compiler_flags_for_consumer(consumer, arc, language)
             flags = consumer.compiler_flags.dup
@@ -1000,8 +1013,8 @@ module Pod
                   raise Informative, error_message_for_missing_reference.call(sf, target) unless ref
                 end
               rescue Errno::ENOENT
-                # Normalize the error for Ruby < 2.7. Ruby 2.7 can crash on a different call of real path compared
-                # to older versions. This ensures that the error message is consistent.
+                  Normalize the error for Ruby < 2.7. Ruby 2.7 can crash on a different call of real path compared
+                  to older versions. This ensures that the error message is consistent.
                 raise Informative, error_message_for_missing_reference.call(sf, target)
               end
             end
@@ -1068,10 +1081,10 @@ module Pod
             end
           end
 
-          # Adds a placeholder native target for the library to the Pods project with the
-          # appropriate build configurations.
+            Adds a placeholder native target for the library to the Pods project with the
+            appropriate build configurations.
           #
-          # @return [PBXAggregateTarget] the native target that was added.
+            @return [PBXAggregateTarget] the native target that was added.
           #
           def add_placeholder_target
             native_target = project.new_aggregate_target(target.label, [], target.platform.name, deployment_target)
@@ -1086,16 +1099,16 @@ module Pod
             native_target
           end
 
-          # Adds a shell script phase, intended only for library targets that contain swift,
-          # to copy the ObjC compatibility header (the -Swift.h file that the swift compiler generates)
-          # to the built products directory. Additionally, the script phase copies the module map, appending a `.Swift`
-          # submodule that references the (moved) compatibility header. Since the module map has been moved, the umbrella header
-          # is _also_ copied, so that it is sitting next to the module map. This is necessary for a successful archive build.
+            Adds a shell script phase, intended only for library targets that contain swift,
+            to copy the ObjC compatibility header (the -Swift.h file that the swift compiler generates)
+            to the built products directory. Additionally, the script phase copies the module map, appending a `.Swift`
+            submodule that references the (moved) compatibility header. Since the module map has been moved, the umbrella header
+            is _also_ copied, so that it is sitting next to the module map. This is necessary for a successful archive build.
           #
-          # @param  [PBXNativeTarget] native_target
-          #         the native target to add the Swift static library script phase into.
+            @param  [PBXNativeTarget] native_target
+                    the native target to add the Swift static library script phase into.
           #
-          # @return [Void]
+            @return [Void]
           #
           def add_swift_library_compatibility_header_phase(native_target)
             if custom_module_map
@@ -1136,7 +1149,7 @@ module Pod
             end
           end
 
-          # Raises if a vendored xcframework contains frameworks of mixed linkage or mixed packaging
+            Raises if a vendored xcframework contains frameworks of mixed linkage or mixed packaging
           #
           def validate_xcframeworks
             target.xcframeworks.each_value do |xcframeworks|
@@ -1171,12 +1184,12 @@ module Pod
             end
           end
 
-          #-----------------------------------------------------------------------#
+          -----------------------------------------------------------------------#
 
           class << self
-            # @param [PodTarget] target the target to be installed
+              @param [PodTarget] target the target to be installed
             #
-            # @return [Array<String>] the dSYM paths for the given target
+              @return [Array<String>] the dSYM paths for the given target
             #
             def dsym_paths(target)
               dsym_paths = target.framework_paths.values.flatten.reject { |fmwk_path| fmwk_path.dsym_path.nil? }.map(&:dsym_path)
@@ -1184,9 +1197,9 @@ module Pod
               dsym_paths
             end
 
-            # @param [PodTarget] target the target to be installed
+              @param [PodTarget] target the target to be installed
             #
-            # @return [Array<String>] the bcsymbolmap paths for the given target
+              @return [Array<String>] the bcsymbolmap paths for the given target
             #
             def bcsymbolmap_paths(target)
               target.framework_paths.values.flatten.reject do |fmwk_path|
@@ -1194,10 +1207,10 @@ module Pod
               end.flat_map(&:bcsymbolmap_paths)
             end
 
-            # @param  [Pathname] xcframework_path
-            #         the base path of the .xcframework bundle
+              @param  [Pathname] xcframework_path
+                      the base path of the .xcframework bundle
             #
-            # @return [Array<Pathname>] all found .dSYM paths
+              @return [Array<Pathname>] all found .dSYM paths
             #
             def xcframework_dsyms(xcframework_path)
               basename = File.basename(xcframework_path, '.xcframework')

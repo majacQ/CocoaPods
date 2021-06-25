@@ -45,10 +45,16 @@ module Pod
           #
           attr_reader :info_plist_entries
 
+  <<<<<<< amorde/scheme-gen-fix
+          # @return [String] the product name of the app bundle
+          #
+          attr_reader :product_name
+  =======
           # @return [String] product_basename
           #         The product basename to use for the target.
           #
           attr_reader :product_basename
+  >>>>>>> master
 
           # Initialize a new instance
           #
@@ -62,7 +68,11 @@ module Pod
           # @param [Hash] info_plist_entries see #info_plist_entries
           # @param [String] product_basename see #product_basename
           #
+  <<<<<<< amorde/scheme-gen-fix
+          def initialize(sandbox, project, platform, subgroup_name, group_name, app_target_label, add_main: true, add_launchscreen_storyboard: platform == :ios, info_plist_entries: {}, product_name: app_target_label)
+  =======
           def initialize(sandbox, project, platform, subgroup_name, group_name, app_target_label, add_main: true, add_launchscreen_storyboard: platform == :ios, info_plist_entries: {}, product_basename: nil)
+  >>>>>>> master
             @sandbox = sandbox
             @project = project
             @platform = platform
@@ -72,7 +82,11 @@ module Pod
             @add_main = add_main
             @add_launchscreen_storyboard = add_launchscreen_storyboard
             @info_plist_entries = info_plist_entries
+  <<<<<<< amorde/scheme-gen-fix
+            @product_name = product_name
+  =======
             @product_basename = product_basename || app_target_label
+  >>>>>>> master
             target_group = project.pod_group(group_name)
             @group = target_group[subgroup_name] || target_group.new_group(subgroup_name)
           end
@@ -82,9 +96,16 @@ module Pod
           def install!
             platform_name = platform.name
             app_host_target = Pod::Generator::AppTargetHelper.add_app_target(project, platform_name, deployment_target,
+  <<<<<<< amorde/scheme-gen-fix
+                                                                             File.basename(product_name, '.*'))
+            app_host_target.name = app_target_label
+            app_host_target.build_configurations.each do |configuration|
+              configuration.build_settings['PRODUCT_NAME'] = File.basename(product_name)
+  =======
                                                                              app_target_label, product_basename)
             app_host_target.build_configurations.each do |configuration|
               configuration.build_settings['PRODUCT_NAME'] = product_basename
+  >>>>>>> master
               configuration.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'org.cocoapods.${PRODUCT_NAME:rfc1034identifier}'
               if platform == :osx
                 configuration.build_settings['CODE_SIGN_IDENTITY'] = ''

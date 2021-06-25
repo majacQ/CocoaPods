@@ -13,6 +13,9 @@ jobs:
     env:
       COCOAPODS_CI_TASKS: LINT
     steps:
+      - name: Set build image var
+        run: echo "ImageVersion=$ImageVersion"  >> $GITHUB_ENV
+
       - name: Checkout git
         uses: actions/checkout@v1
 
@@ -24,9 +27,15 @@ jobs:
       - uses: actions/cache@v2
         with:
           path: vendor/bundle
+  <<<<<<< add-big-sur
           key: gems@v1-${{ matrix.os }}-Ruby${{ matrix.ruby }}-${{ hashFiles('Gemfile.lock') }}
           restore-keys: |
             gems@v1-${{ matrix.os }}-Ruby${{ matrix.ruby }}-
+  =======
+          key: gems@v1-${{ matrix.os }}-${{ env.ImageVersion }}-Ruby${{ matrix.ruby }}-${{ hashFiles('Gemfile.lock') }}
+          restore-keys: |
+            gems@v1-${{ matrix.os }}-${{ env.ImageVersion }}-Ruby${{ matrix.ruby }}-
+  >>>>>>> master
       - name: Run bundle install
         run: |
           gem install bundler -v "~> 1.17"
@@ -39,7 +48,7 @@ jobs:
 on:
   push:
     branches:
-      - "master"
+      - "*"
       - "*-stable"
   pull_request:
     branches:

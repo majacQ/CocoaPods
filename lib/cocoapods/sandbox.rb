@@ -34,6 +34,14 @@ module Pod
   #     +-- Manifest.lock
   #     |
   #     +-- Pods.xcodeproj
+  #  (if installation option 'generate_multiple_pod_projects' is enabled)
+  #     |
+  #     +-- PodTarget1.xcodeproj
+  #     |
+  #    ...
+  #     |
+  #     +-- PodTargetN.xcodeproj
+  #
   #
   class Sandbox
     autoload :FileAccessor,  'cocoapods/sandbox/file_accessor'
@@ -66,19 +74,13 @@ module Pod
     end
 
     # @return [Lockfile] the manifest which contains the information about the
-    #         installed pods.
+    #         installed pods or `nil` if one is not present.
     #
-    attr_accessor :manifest
-
     def manifest
       @manifest ||= begin
         Lockfile.from_file(manifest_path) if manifest_path.exist?
       end
     end
-
-    # @return [Project] the Pods project.
-    #
-    attr_accessor :project
 
     # Removes the files of the Pod with the given name from the sandbox.
     #
@@ -92,14 +94,14 @@ module Pod
       end
       podspec_path = specification_path(name)
       podspec_path.rmtree if podspec_path
+      pod_target_project_path = pod_target_project_path(name)
+      pod_target_project_path.rmtree if pod_target_project_path.exist?
     end
 
     # Prepares the sandbox for a new installation removing any file that will
     # be regenerated and ensuring that the directories exists.
     #
     def prepare
-      FileUtils.rm_rf(headers_root)
-
       FileUtils.mkdir_p(headers_root)
       FileUtils.mkdir_p(sources_root)
       FileUtils.mkdir_p(specifications_root)
@@ -128,6 +130,33 @@ module Pod
     #
     def project_path
       root + 'Pods.xcodeproj'
+    end
+
+    # @return [Pathname] the path of the installation cache.
+    #
+    def project_installation_cache_path
+      root.join('.project_cache', 'installation_cache.yaml')
+    end
+
+    # @return [Pathname] the path of the metadata cache.
+    #
+    def project_metadata_cache_path
+      root.join('.project_cache', 'metadata_cache.yaml')
+    end
+
+    # @return [Pathname] the path of the version cache.
+    #
+    def project_version_cache_path
+      root.join('.project_cache', 'version')
+    end
+
+    # @param [String] pod_target_name
+    # Name of the pod target used to generate the path of its Xcode project.
+    #
+    # @return [Pathname] the path of the project for a pod target.
+    #
+    def pod_target_project_path(pod_target_name)
+      root + "#{pod_target_name}.xcodeproj"
     end
 
     # Returns the path for the directory where the support files of
@@ -254,25 +283,29 @@ module Pod
       file_name = json ? "#{name}.podspec.json" : "#{name}.podspec"
       output_path = specifications_root + file_name
 
-      case podspec
-      when String
-        output_path.open('w') { |f| f.puts(podspec) }
-      when Pathname
-        unless podspec.exist?
-          raise Informative, "No podspec found for `#{name}` in #{podspec}"
+      spec =
+        case podspec
+        when String
+          Sandbox.update_changed_file(output_path, podspec)
+          Specification.from_file(output_path)
+        when Pathname
+          unless podspec.exist?
+            raise Informative, "No podspec found for `#{name}` in #{podspec}"
+          end
+          FileUtils.copy(podspec, output_path)
+          Specification.from_file(podspec)
+        when Specification
+          raise ArgumentError, 'can only store Specification objects as json' unless json
+          Sandbox.update_changed_file(output_path, podspec.to_pretty_json)
+          podspec.dup
+        else
+          raise ArgumentError, "Unknown type for podspec: #{podspec.inspect}"
         end
-        spec = Specification.from_file(podspec)
-        FileUtils.copy(podspec, output_path)
-      when Specification
-        raise ArgumentError, 'can only store Specification objects as json' unless json
-        output_path.open('w') { |f| f.puts(podspec.to_pretty_json) }
-        spec = podspec.dup
-      else
-        raise ArgumentError, "Unknown type for podspec: #{podspec.inspect}"
-      end
 
-      spec ||= Specification.from_file(output_path)
-      spec.defined_in_file ||= output_path
+      # we force the file to be the file in the sandbox, so specs that have been serialized to
+      # json maintain a consistent checksum.
+      # this is safe to do because `spec` is always a clean instance
+      spec.defined_in_file = output_path
 
       unless spec.name == name
         raise Informative, "The name of the given podspec `#{spec.name}` doesn't match the expected one `#{name}`"
@@ -346,6 +379,18 @@ module Pod
       checkout_sources.delete(root_name)
     end
 
+    # Removes local podspec a Pod.
+    #
+    # @param  [String] name
+    #         The name of the Pod.
+    #
+    # @return [void]
+    #
+    def remove_local_podspec(name)
+      local_podspec = specification_path(name)
+      FileUtils.rm(local_podspec) if local_podspec
+    end
+
     # @return [Hash{String=>Hash}] The options necessary to recreate the exact
     #         checkout of a given Pod grouped by its name.
     #
@@ -397,6 +442,27 @@ module Pod
     def local_podspec(name)
       root_name = Specification.root_name(name)
       development_pods[root_name]
+    end
+
+    # @!group Convenience Methods
+
+    # Writes a file if it does not exist or if its contents have changed.
+    #
+    # @param  [Pathname] path
+    #         The path to read from and write to.
+    #
+    # @param  [String] contents
+    #         The contents to write if they do not match or the file does not exist.
+    #
+    # @return [void]
+    #
+    def self.update_changed_file(path, contents)
+      if path.exist?
+        content_stream = StringIO.new(contents)
+        identical = File.open(path, 'rb') { |f| FileUtils.compare_stream(f, content_stream) }
+        return if identical
+      end
+      File.open(path, 'w') { |f| f.write(contents) }
     end
 
     #-------------------------------------------------------------------------#

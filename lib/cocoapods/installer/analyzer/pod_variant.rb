@@ -11,14 +11,41 @@ module Pod
         #
         attr_reader :test_specs
 
+        # @return [Array<Specification>] the app specs for the target
+        #
+        attr_reader :app_specs
+
         # @return [Platform] the platform
         #
         attr_reader :platform
 
-        # @return [Bool] whether this pod should be built as framework
+        # @return [BuildType] the build type of the target
         #
-        attr_reader :requires_frameworks
-        alias_method :requires_frameworks?, :requires_frameworks
+        attr_reader :build_type
+
+        # @return [String] the Swift version of the target.
+        #
+        attr_reader :swift_version
+
+        # Initialize a new instance from its attributes.
+        #
+        # @param [Array<Specification>] specs      @see #specs
+        # @param [Array<Specification>] test_specs @see #test_specs
+        # @param [Array<Specification>] app_specs  @see #app_specs
+        # @param [Platform] platform               @see #platform
+        # @param [BuildType] build_type            @see #build_type
+        # @param [String] swift_version            @see #swift_version
+        #
+        def initialize(specs, test_specs, app_specs, platform, build_type = BuildType.static_library,
+                       swift_version = nil)
+          @specs = specs
+          @test_specs = test_specs
+          @app_specs = app_specs
+          @platform = platform
+          @build_type = build_type
+          @swift_version = swift_version
+          @hash = [specs, platform, build_type, swift_version].hash
+        end
 
         # @return [Specification] the root specification
         #
@@ -26,30 +53,15 @@ module Pod
           specs.first.root
         end
 
-        # Initialize a new instance from its attributes.
+        # @note Non library specs are intentionally not included as part of the equality for pod variants since a pod
+        #       variant should not be affected by the number of test nor app specs included.
         #
-        # @param [Array<Specification>] specs      @see #specs
-        # @param [Array<Specification>] test_specs @see #test_specs
-        # @param [Platform] platform               @see #platform
-        # @param [Bool] requires_frameworks        @see #requires_frameworks?
-        #
-        def initialize(specs, test_specs, platform, requires_frameworks = false)
-          @specs = specs
-          @test_specs = test_specs
-          @platform = platform
-          @requires_frameworks = requires_frameworks
-          @hash = [specs, platform, requires_frameworks].hash
-        end
-
-        # @note Test specs are intentionally not included as part of the equality for pod variants since a
-        #       pod variant should not be affected by the number of test specs included.
-        #
-        # @return [Bool] whether the {PodVariant} is equal to another taking all
-        #         all their attributes into account
+        # @return [Bool] whether the {PodVariant} is equal to another taking all all their attributes into account
         #
         def ==(other)
           self.class == other.class &&
-            requires_frameworks == other.requires_frameworks &&
+          build_type == other.build_type &&
+            swift_version == other.swift_version &&
             platform == other.platform &&
             specs == other.specs
         end
@@ -61,6 +73,14 @@ module Pod
         #
         # @!visibility private
         attr_reader :hash
+
+        # @param [String] swift_version The swift version to use for this variant.
+        #
+        # @return [PodVariant] A copy of this pod variant with the specified Swift version.
+        #
+        def scoped_with_swift_version(swift_version)
+          PodVariant.new(specs, test_specs, app_specs, platform, build_type, swift_version)
+        end
       end
     end
   end

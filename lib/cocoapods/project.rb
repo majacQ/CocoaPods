@@ -21,22 +21,39 @@ module Pod
     #
     attr_reader :development_pods
 
+    # @return [PBXGroup] The group for dependencies.
+    # Used by #generate_multiple_pod_projects installation option.
+    #
+    attr_reader :dependencies_group
+
+    # @return [Bool] Bool indicating if this project is a pod target subproject.
+    # Used by `generate_multiple_pod_projects` installation option.
+    #
+    attr_reader :pod_target_subproject
+    alias pod_target_subproject? pod_target_subproject
+
+    # @return [String] The basename of the project path without .xcodeproj extension.
+    #
+    attr_reader :project_name
+
     # Initialize a new instance
     #
-    # @param  [Pathname, String] path @see #path
-    # @param  [Bool] skip_initialization
-    #         Whether the project should be initialized from scratch.
-    # @param  [Int] object_version
-    #         Object version to use for serialization, defaults to Xcode 3.2 compatible.
+    # @param  [Pathname, String] path @see Xcodeproj::Project#path
+    # @param  [Bool] skip_initialization Whether the project should be initialized from scratch.
+    # @param  [Int] object_version Object version to use for serialization, defaults to Xcode 3.2 compatible.
     #
     def initialize(path, skip_initialization = false,
-        object_version = Xcodeproj::Constants::DEFAULT_OBJECT_VERSION)
+                    object_version = Xcodeproj::Constants::DEFAULT_OBJECT_VERSION, pod_target_subproject: false)
+      @uuid_prefix = Digest('SHA256').hexdigest(File.basename(path)).upcase
       super(path, skip_initialization, object_version)
       @support_files_group = new_group('Targets Support Files')
       @refs_by_absolute_path = {}
       @variant_groups_by_path_and_name = {}
       @pods = new_group('Pods')
       @development_pods = new_group('Development Pods')
+      @dependencies_group = new_group('Dependencies')
+      @pod_target_subproject = pod_target_subproject
+      @project_name = Pathname(path).basename('.*').to_s
       self.symroot = LEGACY_BUILD_ROOT
     end
 
@@ -52,7 +69,7 @@ module Pod
     #
     def generate_available_uuid_list(count = 100)
       start = @generated_uuids.size
-      uniques = Array.new(count) { |i| format('%011X0', start + i) }
+      uniques = Array.new(count) { |i| format('%.6s%07X0', @uuid_prefix, start + i) }
       @generated_uuids += uniques
       @available_uuids += uniques
     end
@@ -91,27 +108,73 @@ module Pod
     #         The path to the root of the Pod.
     #
     # @param  [Bool] development
-    #         Wether the group should be added to the Development Pods group.
+    #         Whether the group should be added to the Development Pods group.
     #
     # @param  [Bool] absolute
-    #         Wether the path of the group should be set as absolute.
+    #         Whether the path of the group should be set as absolute.
     #
     # @return [PBXGroup] The new group.
     #
     def add_pod_group(pod_name, path, development = false, absolute = false)
       raise '[BUG]' if pod_group(pod_name)
 
-      parent_group = development ? development_pods : pods
+      parent_group =
+        if pod_target_subproject
+          main_group
+        else
+          development ? development_pods : pods
+        end
       source_tree = absolute ? :absolute : :group
 
       group = parent_group.new_group(pod_name, path, source_tree)
       group
     end
 
+    # Creates a new subproject reference for the given project and configures its
+    # group location.
+    #
+    # @param [Project] project
+    #        The subproject to be added.
+    #
+    # @param [Bool] development
+    #        Whether the project should be added to the Development Pods group.
+    #        For projects where `pod_target_subproject` is enabled, all subprojects are added into the Dependencies group.
+    #
+    # @return [PBXFileReference] The new file reference.
+    #
+    def add_pod_subproject(project, development = false)
+      parent_group = group_for_subproject_reference(development)
+      add_subproject_reference(project, parent_group)
+    end
+
+    # Creates a new subproject reference for the given cached metadata and configures its
+    # group location.
+    #
+    # @param [Sandbox] sandbox
+    #        The sandbox used for installation.
+    #
+    # @param [TargetMetadata] metadata
+    #        The project metadata to be added.
+    #
+    # @param [Bool] development
+    #        Whether the project should be added to the Development Pods group.
+    #        For projects where `pod_target_subproject` is enabled, all subprojects are added into the Dependencies group.
+    #
+    # @return [PBXFileReference] The new file reference.
+    #
+    def add_cached_pod_subproject(sandbox, metadata, development = false)
+      parent_group = group_for_subproject_reference(development)
+      add_cached_subproject_reference(sandbox, metadata, parent_group)
+    end
+
     # @return [Array<PBXGroup>] Returns all the group of the Pods.
     #
     def pod_groups
-      pods.children.objects + development_pods.children.objects
+      if pod_target_subproject
+        main_group.children.objects
+      else
+        pods.children.objects + development_pods.children.objects
+      end
     end
 
     # Returns the group for the Pod with the given name.
@@ -212,6 +275,40 @@ module Pod
       @refs_by_absolute_path[file_path_name.to_s] = ref
     end
 
+    # @!group File references
+    #-------------------------------------------------------------------------#
+
+    # Adds a file reference for a project as a child of the given group.
+    #
+    # @param  [Project] project
+    #         The project to add as a subproject reference.
+    #
+    # @param  [PBXGroup] group
+    #         The group for the new subproject reference.
+    #
+    # @return [PBXFileReference] The new file reference.
+    #
+    def add_subproject_reference(project, group)
+      new_subproject_file_reference(project.path, group)
+    end
+
+    # Adds a file reference for a cached project as a child of the given group.
+    #
+    # @param  [Sandbox] sandbox
+    #         The sandbox used for installation.
+    #
+    # @param  [MetadataCache] metadata
+    #         The metadata holding the required properties to create a subproject reference.
+    #
+    # @param  [PBXGroup] group
+    #         The group for the new subproject reference.
+    #
+    # @return [PBXFileReference] The new file reference.
+    #
+    def add_cached_subproject_reference(sandbox, metadata, group)
+      new_subproject_file_reference(sandbox.root + metadata.container_project_path, group)
+    end
+
     # Returns the file reference for the given absolute path.
     #
     # @param  [#to_s] absolute_path
@@ -252,6 +349,8 @@ module Pod
       file_ref.xc_language_specification_identifier = 'xcode.lang.ruby'
       file_ref.explicit_file_type = 'text.script.ruby'
       file_ref.last_known_file_type = 'text'
+      file_ref.tab_width = '2'
+      file_ref.indent_width = '2'
     end
 
     # Adds a new build configuration to the project and populates it with
@@ -381,7 +480,7 @@ module Pod
     # Returns the name to be used for a the variant group for a file at a given path.
     # The path must be localized (within an *.lproj directory).
     #
-    # @param  [Pathname] The localized path to get a variant group name for.
+    # @param  [Pathname] path The localized path to get a variant group name for.
     #
     # @return [String] The variant group name.
     #
@@ -407,6 +506,37 @@ module Pod
       end
 
       path.basename.to_s
+    end
+
+    def new_subproject_file_reference(project_path, group)
+      if ref = reference_for_path(project_path)
+        return ref
+      end
+
+      # We call into the private function `FileReferencesFactory.new_file_reference` instead of `FileReferencesFactory.new_reference`
+      # because it delegates into `FileReferencesFactory.new_subproject` which has the extra behavior of opening the Project which
+      # is an expensive operation for large projects.
+      #
+      ref = Xcodeproj::Project::FileReferencesFactory.send(:new_file_reference, group, project_path, :group)
+      ref.name = Pathname(project_path).basename('.*').to_s
+      ref.include_in_index = nil
+
+      attribute = PBXProject.references_by_keys_attributes.find { |attrb| attrb.name == :project_references }
+      project_reference = ObjectDictionary.new(attribute, group.project.root_object)
+      project_reference[:project_ref] = ref
+      root_object.project_references << project_reference
+      refs_by_absolute_path[project_path.to_s] = ref
+      ref
+    end
+
+    # Returns the parent group a new subproject reference should belong to.
+    #
+    def group_for_subproject_reference(development)
+      if pod_target_subproject
+        dependencies_group
+      else
+        development ? development_pods : pods
+      end
     end
 
     #-------------------------------------------------------------------------#

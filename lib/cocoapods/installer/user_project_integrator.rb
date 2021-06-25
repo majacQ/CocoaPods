@@ -18,11 +18,8 @@ module Pod
       #
       attr_reader :podfile
 
-      # @return [Project] the pods project which contains the libraries to
-      #         integrate.
+      # @return [Sandbox] The sandbox used for this installation.
       #
-      # attr_reader :pods_project
-
       attr_reader :sandbox
 
       # @return [Pathname] the path of the installation.
@@ -37,18 +34,32 @@ module Pod
       #
       attr_reader :targets
 
-      # Init a new UserProjectIntegrator
+      # @return [Array<AggregateTarget>] the targets that require integration. This will always be equal or a smaller
+      #         subset of #targets.
       #
-      # @param  [Podfile]  podfile @see #podfile
-      # @param  [Sandbox]  sandbox @see #sandbox
+      attr_reader :targets_to_integrate
+
+      # @return [Boolean] whether to use input/output paths for build phase scripts
+      #
+      attr_reader :use_input_output_paths
+      alias use_input_output_paths? use_input_output_paths
+
+      # Initialize a new instance
+      #
+      # @param  [Podfile] podfile @see #podfile
+      # @param  [Sandbox] sandbox @see #sandbox
       # @param  [Pathname] installation_root @see #installation_root
-      # @param  [Array<AggregateTarget>]  targets @see #targets
+      # @param  [Array<AggregateTarget>] targets @see #targets
+      # @param  [Array<AggregateTarget>] targets_to_integrate @see #targets_to_integrate
+      # @param  [Boolean] use_input_output_paths @see #use_input_output_paths
       #
-      def initialize(podfile, sandbox, installation_root, targets)
+      def initialize(podfile, sandbox, installation_root, targets, targets_to_integrate, use_input_output_paths: true)
         @podfile = podfile
         @sandbox = sandbox
         @installation_root = installation_root
         @targets = targets
+        @targets_to_integrate = targets_to_integrate
+        @use_input_output_paths = use_input_output_paths
       end
 
       # Integrates the user projects associated with the {TargetDefinitions}
@@ -58,9 +69,11 @@ module Pod
       #
       def integrate!
         create_workspace
+        deintegrated_projects = deintegrate_removed_targets
         integrate_user_targets
         warn_about_xcconfig_overrides
-        save_projects
+        projects_to_save = (user_projects_to_integrate + deintegrated_projects).uniq
+        save_projects(projects_to_save)
       end
 
       #-----------------------------------------------------------------------#
@@ -100,6 +113,23 @@ module Pod
         end
       end
 
+      # Deintegrates the targets of the user projects that are no longer part of the installation.
+      #
+      # @return [Array<Xcodeproj::PBXProject>] The list of projects that were deintegrated.
+      #
+      def deintegrate_removed_targets
+        Config.instance.with_changes(:silent => true) do
+          deintegrator = Deintegrator.new
+          all_project_targets = user_projects.flat_map(&:native_targets).uniq
+          all_native_targets = targets.flat_map(&:user_targets).uniq
+          targets_to_deintegrate = all_project_targets - all_native_targets
+          targets_to_deintegrate.each do |target|
+            deintegrator.deintegrate_target(target)
+          end
+          return targets_to_deintegrate.map(&:project).select(&:dirty?).uniq
+        end
+      end
+
       # Integrates the targets of the user projects with the libraries
       # generated from the {Podfile}.
       #
@@ -111,28 +141,19 @@ module Pod
       #
       def integrate_user_targets
         target_integrators = targets_to_integrate.sort_by(&:name).map do |target|
-          TargetIntegrator.new(target)
+          TargetIntegrator.new(target, :use_input_output_paths => use_input_output_paths?)
         end
-
-        Config.instance.with_changes(:silent => true) do
-          deintegrator = Deintegrator.new
-          all_project_targets = user_projects.flat_map(&:native_targets).uniq
-          all_native_targets = targets_to_integrate.flat_map(&:user_targets).uniq
-          targets_to_deintegrate = all_project_targets - all_native_targets
-          targets_to_deintegrate.each do |target|
-            deintegrator.deintegrate_target(target)
-          end
-        end
-
         target_integrators.each(&:integrate!)
       end
 
       # Save all user projects.
       #
+      # @param [Array<Xcodeproj::PBXProject>] projects The projects to save.
+      #
       # @return [void]
       #
-      def save_projects
-        user_projects.each do |project|
+      def save_projects(projects)
+        projects.each do |project|
           if project.dirty?
             project.save
           else
@@ -157,7 +178,7 @@ module Pod
       # warning to inform the user if needed.
       #
       def warn_about_xcconfig_overrides
-        targets.each do |aggregate_target|
+        targets_to_integrate.each do |aggregate_target|
           aggregate_target.user_targets.each do |user_target|
             user_target.build_configurations.each do |config|
               xcconfig = aggregate_target.xcconfigs[config.name]
@@ -200,21 +221,30 @@ module Pod
         end
       end
 
-      # @return [Array<Pathname>] the paths of all the user projects referenced
-      #         by the target definitions.
+      # @return [Array<Xcodeproj::Project>] the projects of all the targets that require integration.
+      #
+      # @note   Empty target definitions are ignored.
+      #
+      def user_projects_to_integrate
+        targets_to_integrate.map(&:user_project).compact.uniq
+      end
+
+      # @return [Array<Xcodeproj::Project>] the projects of all the targets regardless of whether they are integrated
+      #         or not.
+      #
+      # @note   Empty target definitions are ignored.
+      #
+      def user_projects
+        targets.map(&:user_project).compact.uniq
+      end
+
+      # @return [Array<Pathname>] the paths of all the user projects from all targets regardless of whether they are
+      #         integrated or not.
       #
       # @note   Empty target definitions are ignored.
       #
       def user_project_paths
         targets.map(&:user_project_path).compact.uniq
-      end
-
-      def user_projects
-        targets.map(&:user_project).compact.uniq
-      end
-
-      def targets_to_integrate
-        targets
       end
 
       # Prints a warning informing the user that a build configuration of
@@ -223,7 +253,7 @@ module Pod
       # @param  [Target::AggregateTarget] aggregate_target
       #         The umbrella target.
       #
-      # @param  [XcodeProj::PBXNativeTarget] user_target
+      # @param  [Xcodeproj::PBXNativeTarget] user_target
       #         The native target.
       #
       # @param  [Xcodeproj::XCBuildConfiguration] config

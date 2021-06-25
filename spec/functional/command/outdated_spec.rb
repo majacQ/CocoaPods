@@ -108,7 +108,7 @@ module Pod
 
     it "updates the Podfile's sources by default" do
       podfile = Podfile.new do
-        source 'https://github.com/CocoaPods/Specs.git'
+        source Pod::TrunkSource::TRUNK_REPO_URL
         pod 'AFNetworking'
       end
       config.stubs(:podfile).returns(podfile)
@@ -116,13 +116,13 @@ module Pod
       lockfile.stubs(:version).returns(Version.new('1.0'))
       lockfile.stubs(:pod_names).returns(%w(AFNetworking))
       Command::Outdated.any_instance.stubs(:lockfile).returns(lockfile)
-      config.sources_manager.expects(:update).once
+      Source::Manager.any_instance.expects(:update).once
       run_command('outdated')
     end
 
     it "doesn't updates the Podfile's sources with --no-repo-update" do
       config.stubs(:podfile).returns Podfile.new do
-        source 'https://github.com/CocoaPods/Specs.git'
+        source Pod::TrunkSource::TRUNK_REPO_URL
         pod 'AFNetworking'
       end
       lockfile = mock

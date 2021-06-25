@@ -51,17 +51,17 @@ module Pod
         # @todo The template is outdated.
 
         def default_data_for_template(name)
-          data = {}
-          data[:name]          = name
-          data[:version]       = '0.0.1'
-          data[:summary]       = "A short description of #{name}."
-          data[:homepage]      = "http://EXAMPLE/#{name}"
-          data[:author_name]   = `git config --get user.name`.strip
-          data[:author_email]  = `git config --get user.email`.strip
-          data[:source_url]    = "http://EXAMPLE/#{name}.git"
-          data[:ref_type]      = ':tag'
-          data[:ref]           = '#{spec.version}'
-          data
+          {
+            :name => name,
+            :version => '0.0.1',
+            :summary =>  "A short description of #{name}.",
+            :homepage => "http://EXAMPLE/#{name}",
+            :author_name => Executable.capture_command('git', %w(config --get user.name), :capture => :out).first.strip,
+            :author_email => Executable.capture_command('git', %w(config --get user.email), :capture => :out).first.strip,
+            :source_url => "http://EXAMPLE/#{name}.git",
+            :ref_type => ':tag',
+            :ref => '#{spec.version}',
+          }
         end
 
         def github_data_for_template(repo_id)
@@ -112,7 +112,7 @@ module Pod
 #  Be sure to run `pod spec lint #{data[:name]}.podspec' to ensure this is a
 #  valid spec and to remove all comments including this before submitting the spec.
 #
-#  To learn more about Podspec attributes see https://docs.cocoapods.org/specification.html
+#  To learn more about Podspec attributes see https://guides.cocoapods.org/syntax/podspec.html
 #  To see working Podspecs in the CocoaPods repo see https://github.com/CocoaPods/Specs/
 #
 

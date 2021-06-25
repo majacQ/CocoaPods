@@ -9,7 +9,7 @@ module Pod
             @monkey_spec = fixture_spec('monkey/monkey.podspec')
             @monkey_pod_target = fixture_pod_target(@monkey_spec)
 
-            vspec = stub(:test_specification? => false)
+            vspec = stub(:library_specification? => true, :spec_type => :library)
             consumer = stub(
               "Spec Consumer (#{vspec} iOS)",
               :spec => vspec,
@@ -27,6 +27,7 @@ module Pod
               :vendored_static_libraries => [config.sandbox.root + 'BBB/StaticLibrary.a'],
               :vendored_dynamic_frameworks => [config.sandbox.root + 'CCC/VendoredFramework.framework'],
               :vendored_dynamic_libraries => [config.sandbox.root + 'DDD/VendoredDyld.dyld'],
+              :vendored_xcframeworks => [],
             )
             file_accessor.stubs(:vendored_libraries => file_accessor.vendored_static_libraries + file_accessor.vendored_dynamic_libraries,
                                 :vendored_frameworks => file_accessor.vendored_static_frameworks + file_accessor.vendored_dynamic_frameworks)
@@ -36,8 +37,7 @@ module Pod
               :pod_name => 'BananaLib',
               :sandbox => config.sandbox,
               :should_build? => false,
-              :requires_frameworks? => true,
-              :static_framework? => false,
+              :build_as_framework? => true,
               :dependent_targets => [],
               :_add_recursive_dependent_targets => [],
               :recursive_dependent_targets => [],
@@ -47,15 +47,15 @@ module Pod
               :uses_swift? => false,
               :specs => [vspec],
             )
-            vendored_dep_target.stubs(:build_settings => PodTargetSettings.new(vendored_dep_target))
+            vendored_dep_target.stubs(:build_settings => { :debug => PodTargetSettings.new(vendored_dep_target, nil, :configuration => :debug) })
 
             @spec = fixture_spec('banana-lib/BananaLib.podspec')
-            @pod_target = fixture_pod_target(@spec, true)
+            @pod_target = fixture_pod_target(@spec, BuildType.dynamic_framework)
             @pod_target.dependent_targets = [@monkey_pod_target, vendored_dep_target]
 
             @consumer = @pod_target.spec_consumers.first
             @podfile = @pod_target.podfile
-            @generator = PodTargetSettings.new(@pod_target)
+            @generator = PodTargetSettings.new(@pod_target, nil, :configuration => :debug)
 
             @spec.pod_target_xcconfig = { 'OTHER_LDFLAGS' => '-no_compact_unwind' }
             @spec.user_target_xcconfig = { 'CLANG_CXX_LANGUAGE_STANDARD' => 'c++11' }
@@ -78,19 +78,19 @@ module Pod
             @xcconfig.to_hash['OTHER_LDFLAGS'].should.include('-no_compact_unwind')
           end
 
-          it 'includes the libraries for the specifications' do
+          it 'does include the system libraries for the specifications' do
             @xcconfig.to_hash['OTHER_LDFLAGS'].should.include('-l"xml2"')
           end
 
-          it 'includes the frameworks of the specifications' do
+          it 'does include the system frameworks of the specifications' do
             @xcconfig.to_hash['OTHER_LDFLAGS'].should.include('-framework "QuartzCore"')
           end
 
-          it 'includes the weak-frameworks of the specifications' do
+          it 'does include the system weak frameworks of the specifications' do
             @xcconfig.to_hash['OTHER_LDFLAGS'].should.include('-weak_framework "iAd"')
           end
 
-          it 'includes the vendored dynamic frameworks for dependency pods of the specification' do
+          it 'does include the vendored dynamic frameworks for dependency pods of the specification' do
             @xcconfig.to_hash['OTHER_LDFLAGS'].should.include('-framework "dynamic-monkey"')
           end
 
@@ -124,7 +124,7 @@ module Pod
           end
 
           it 'vendored frameworks should be added to frameworks paths if use_frameworks! isnt set' do
-            @pod_target.stubs(:requires_frameworks?).returns(false)
+            @pod_target.stubs(:build_type).returns(BuildType.static_library)
             @xcconfig = @generator.generate
             @xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should.include('spec/fixtures/monkey')
             @xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should.include('${PODS_ROOT}/AAA')
@@ -179,9 +179,39 @@ module Pod
           end
 
           it 'does not have a module map to import if it is not built' do
-            @pod_target.stubs(:should_build? => false, :requires_frameworks? => false, :defines_module? => true)
+            @pod_target.stubs(:should_build? => false, :build_as_framework? => false, :defines_module? => true)
             @generator.generate
             @generator.module_map_file_to_import.should.be.nil
+          end
+
+          it 'includes xctunwrap fix for a pod target with deployment target < 12.2 and links XCTest' do
+            @spec.frameworks = ['XCTest']
+            @pod_target.stubs(:platform).returns(Platform.new(:ios, '12.1'))
+            generator = PodTargetSettings.new(@pod_target, nil, :configuration => :debug)
+            hash = generator.generate.to_hash
+            hash['SYSTEM_FRAMEWORK_SEARCH_PATHS'].should.include '"$(PLATFORM_DIR)/Developer/Library/Frameworks"'
+            hash['LIBRARY_SEARCH_PATHS'].should.include '"$(PLATFORM_DIR)/Developer/usr/lib"'
+            hash['SWIFT_INCLUDE_PATHS'].should.include '"$(PLATFORM_DIR)/Developer/usr/lib"'
+          end
+
+          it 'includes xctunwrap fix for a pod target with deployment target < 12.2 and weakly links XCTest' do
+            @spec.weak_frameworks = ['XCTest']
+            @pod_target.stubs(:platform).returns(Platform.new(:ios, '12.1'))
+            generator = PodTargetSettings.new(@pod_target, nil, :configuration => :debug)
+            hash = generator.generate.to_hash
+            hash['SYSTEM_FRAMEWORK_SEARCH_PATHS'].should.include '"$(PLATFORM_DIR)/Developer/Library/Frameworks"'
+            hash['LIBRARY_SEARCH_PATHS'].should.include '"$(PLATFORM_DIR)/Developer/usr/lib"'
+            hash['SWIFT_INCLUDE_PATHS'].should.include '"$(PLATFORM_DIR)/Developer/usr/lib"'
+          end
+
+          it 'does not include xctunwrap fix for a pod target with higher than 12.1 deployment target' do
+            @spec.frameworks = ['XCTest']
+            @pod_target.stubs(:platform).returns(Platform.new(:ios, '12.2'))
+            generator = PodTargetSettings.new(@pod_target, nil, :configuration => :debug)
+            hash = generator.generate.to_hash
+            hash['SYSTEM_FRAMEWORK_SEARCH_PATHS'].should.be.nil
+            hash['LIBRARY_SEARCH_PATHS'].should.not.include '"$(PLATFORM_DIR)/Developer/usr/lib"'
+            hash['SWIFT_INCLUDE_PATHS'].should.be.nil
           end
 
           it 'saves the xcconfig' do
@@ -192,7 +222,7 @@ module Pod
           end
 
           it 'does propagate framework or libraries' do
-            spec = stub('spec', :test_specification? => false)
+            spec = stub('spec', :library_specification? => true, :spec_type => :library)
             consumer = stub('consumer',
                             :libraries => ['xml2'],
                             :frameworks => ['XCTest'],
@@ -210,18 +240,20 @@ module Pod
             pod_target = stub('pod_target',
                               :file_accessors => [file_accessor],
                               :spec_consumers => [consumer],
-                              :requires_frameworks? => true,
-                              :static_framework? => true,
+                              :build_as_framework? => true,
+                              :build_as_static_framework? => true,
+                              :build_as_dynamic_library? => false,
+                              :build_as_dynamic_framework? => false,
                               :dependent_targets => [],
                               :recursive_dependent_targets => [],
                               :sandbox => config.sandbox,
                               :should_build? => true,
                              )
-            pod_target.stubs(:build_settings => PodTargetSettings.new(pod_target))
+            pod_target.stubs(:build_settings => { :debug => PodTargetSettings.new(pod_target, nil, :configuration => :debug) })
             @generator.spec_consumers.each { |sc| sc.stubs(:frameworks => []) }
             @generator.stubs(:dependent_targets => [pod_target])
             @generator.other_ldflags.should.
-              be == %w(-l"Bananalib" -l"VendoredDyld" -l"xml2" -framework "Bananalib" -framework "VendoredFramework" -framework "XCTest" -weak_framework "iAd")
+              be == %w(-l"BananaStaticLib" -l"xml2" -framework "BananaFramework" -weak_framework "iAd")
           end
         end
 
@@ -243,59 +275,98 @@ module Pod
           end
 
           it 'does not merge pod target xcconfig of test specifications for a non test xcconfig' do
-            @coconut_spec.pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'NON_TEST_FLAG=1' }
-            @coconut_test_spec.pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'TEST_ONLY=1' }
-            generator = PodTargetSettings.new(@coconut_pod_target)
+            @coconut_spec.pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'NON_TEST_FLAG=1', 'PODS_ROOT' => 'OVERRIDDEN', 'GCC_WARN_INITIALIZER_NOT_FULLY_BRACKETED' => 'YES', 'GCC_TREAT_WARNINGS_AS_ERRORS' => 'YES' }
+            @coconut_test_spec.pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'TEST_ONLY=1', 'PODS_ROOT' => 'OVERRIDDEN2', 'GCC_WARN_INITIALIZER_NOT_FULLY_BRACKETED' => 'YES', 'GCC_TREAT_WARNINGS_AS_ERRORS' => 'NO' }
+
+            generator = PodTargetSettings.new(@coconut_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['GCC_PREPROCESSOR_DEFINITIONS'].should == '$(inherited) COCOAPODS=1 NON_TEST_FLAG=1'
+            xcconfig.to_hash['PODS_ROOT'].should == 'OVERRIDDEN'
+            xcconfig.to_hash['GCC_WARN_INITIALIZER_NOT_FULLY_BRACKETED'].should == 'YES'
+            xcconfig.to_hash['GCC_TREAT_WARNINGS_AS_ERRORS'].should == 'YES'
+
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+            xcconfig = generator.generate
+            xcconfig.to_hash['GCC_PREPROCESSOR_DEFINITIONS'].should == '$(inherited) COCOAPODS=1 NON_TEST_FLAG=1 TEST_ONLY=1'
+            xcconfig.to_hash['PODS_ROOT'].should == 'OVERRIDDEN2'
+            xcconfig.to_hash['GCC_WARN_INITIALIZER_NOT_FULLY_BRACKETED'].should == 'YES'
+            xcconfig.to_hash['GCC_TREAT_WARNINGS_AS_ERRORS'].should == 'NO'
+
+            UI.warnings.should.be.empty
           end
 
           it 'merges pod target xcconfig settings from subspecs' do
-            @matryoshka_spec.subspecs[0].pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'FIRST_SUBSPEC_FLAG=1' }
+            @matryoshka_spec.subspecs[0].pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'FIRST_SUBSPEC_FLAG=1', 'PODS_ROOT' => 'OVERRIDDEN' }
             @matryoshka_spec.subspecs[1].pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'SECOND_SUBSPEC_FLAG=1' }
-            generator = PodTargetSettings.new(@matryoshka_pod_target)
+            generator = PodTargetSettings.new(@matryoshka_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['GCC_PREPROCESSOR_DEFINITIONS'].should == '$(inherited) COCOAPODS=1 FIRST_SUBSPEC_FLAG=1 SECOND_SUBSPEC_FLAG=1'
+            xcconfig.to_hash['PODS_ROOT'].should == 'OVERRIDDEN'
           end
 
           it 'merges the pod target xcconfig of non test specifications for test xcconfigs' do
             @coconut_spec.pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'NON_TEST_FLAG=1' }
             @coconut_test_spec.pod_target_xcconfig = { 'GCC_PREPROCESSOR_DEFINITIONS' => 'TEST_ONLY=1' }
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['GCC_PREPROCESSOR_DEFINITIONS'].should == '$(inherited) COCOAPODS=1 NON_TEST_FLAG=1 TEST_ONLY=1'
           end
 
           it 'includes correct other ld flags' do
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['OTHER_LDFLAGS'].should == '$(inherited) -ObjC -l"CoconutLib"'
           end
 
           it 'includes correct other ld flags when requires frameworks' do
+  <<<<<<< pb-xcf-objc
+            @coconut_pod_target.stubs(:build_type => BuildType.dynamic_framework)
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             @coconut_pod_target.stubs(:requires_frameworks?).returns(true)
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['OTHER_LDFLAGS'].should == '$(inherited) -ObjC -framework "CoconutLib"'
           end
 
           it 'includes other ld flags for transitive dependent targets' do
             @coconut_pod_target.dependent_targets = [@monkey_pod_target]
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['OTHER_LDFLAGS'].should == '$(inherited) -ObjC -l"CoconutLib" -l"monkey" -framework "dynamic-monkey"'
           end
 
           it 'includes other ld flags for test dependent targets' do
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@monkey_pod_target] }
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['OTHER_LDFLAGS'].should == '$(inherited) -ObjC -l"CoconutLib" -l"monkey" -framework "dynamic-monkey"'
           end
 
           it 'adds settings for test dependent targets' do
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@banana_pod_target] }
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
             xcconfig.to_hash['LIBRARY_SEARCH_PATHS'].should == '$(inherited) "${PODS_CONFIGURATION_BUILD_DIR}/BananaLib" "${PODS_CONFIGURATION_BUILD_DIR}/CoconutLib" "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
@@ -304,7 +375,11 @@ module Pod
           it 'adds settings for test dependent targets excluding the parents targets' do
             @coconut_pod_target.dependent_targets = [@banana_pod_target]
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@banana_pod_target] }
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
             xcconfig.to_hash['LIBRARY_SEARCH_PATHS'].should == '$(inherited) "${PODS_CONFIGURATION_BUILD_DIR}/BananaLib" "${PODS_CONFIGURATION_BUILD_DIR}/CoconutLib" "${PODS_ROOT}/../../spec/fixtures/banana-lib"'
@@ -314,11 +389,11 @@ module Pod
             @banana_pod_target.spec_consumers.each { |sc| sc.stubs(:frameworks => %w(XCTest), :vendored_frameworks => []) }
             @coconut_pod_target.dependent_targets = [@banana_pod_target]
 
-            generator = PodTargetSettings.new(@coconut_pod_target)
+            generator = PodTargetSettings.new(@coconut_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "$(PLATFORM_DIR)/Developer/Library/Frameworks"'
 
-            generator = PodTargetSettings.new(@banana_pod_target)
+            generator = PodTargetSettings.new(@banana_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['FRAMEWORK_SEARCH_PATHS'].should == '$(inherited) "$(PLATFORM_DIR)/Developer/Library/Frameworks"'
           end
@@ -334,7 +409,11 @@ module Pod
             @coconut_pod_target.sandbox.public_headers.add_search_path('CoconutLib', Platform.ios)
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@monkey_pod_target] }
             @coconut_pod_target.dependent_targets = [@banana_pod_target]
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['HEADER_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/Headers/Private"' \
               ' "${PODS_ROOT}/Headers/Private/CoconutLib"' \
@@ -356,7 +435,7 @@ module Pod
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@monkey_pod_target] }
             @coconut_pod_target.dependent_targets = [@banana_pod_target]
             # This is not an test xcconfig so it should exclude header search paths for the 'monkey' pod
-            generator = PodTargetSettings.new(@coconut_pod_target)
+            generator = PodTargetSettings.new(@coconut_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['HEADER_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/Headers/Private"' \
               ' "${PODS_ROOT}/Headers/Private/CoconutLib"' \
@@ -376,7 +455,11 @@ module Pod
             @coconut_pod_target.sandbox.public_headers.add_search_path('CoconutLib', Platform.ios)
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@monkey_pod_target] }
             @coconut_pod_target.dependent_targets = [@banana_pod_target]
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['HEADER_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/Headers/Private"' \
               ' "${PODS_ROOT}/Headers/Private/CoconutLib"' \
@@ -394,7 +477,7 @@ module Pod
             @coconut_pod_target.sandbox.public_headers.add_search_path('CoconutLib', Platform.ios)
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@monkey_pod_target] }
             @coconut_pod_target.dependent_targets = [@banana_pod_target]
-            generator = PodTargetSettings.new(@coconut_pod_target)
+            generator = PodTargetSettings.new(@coconut_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['HEADER_SEARCH_PATHS'].should == '$(inherited) "${PODS_ROOT}/Headers/Private"' \
               ' "${PODS_ROOT}/Headers/Private/CoconutLib"' \
@@ -403,27 +486,39 @@ module Pod
 
           it 'does not include other ld flags for test dependent targets if its not a test xcconfig' do
             @coconut_pod_target.test_dependent_targets_by_spec_name = { @coconut_test_spec.name => [@monkey_pod_target] }
-            generator = PodTargetSettings.new(@coconut_pod_target)
+            generator = PodTargetSettings.new(@coconut_pod_target, nil, :configuration => :debug)
             xcconfig = generator.generate
             xcconfig.to_hash['LIBRARY_SEARCH_PATHS'].should.be.nil
             xcconfig.to_hash['OTHER_LDFLAGS'].should.be.nil
           end
 
           it 'includes default runpath search path list for test xcconfigs' do
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['LD_RUNPATH_SEARCH_PATHS'].should == "$(inherited) '@executable_path/Frameworks' '@loader_path/Frameworks'"
           end
 
           it 'includes default runpath search path list for test xcconfigs for test bundle' do
             @coconut_pod_target.stubs(:platform).returns(Platform.new(:osx, '10.10'))
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['LD_RUNPATH_SEARCH_PATHS'].should == "$(inherited) '@executable_path/../Frameworks' '@loader_path/../Frameworks'"
           end
 
           it 'does not set configuration build dir for test xcconfigs' do
+  <<<<<<< pb-xcf-objc
+            generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec, :configuration => :debug)
+  =======
             generator = PodTargetSettings.new(@coconut_pod_target, @coconut_test_spec_consumer)
+  >>>>>>> segiddins/integrate-into-app-hosts
             xcconfig = generator.generate
             xcconfig.to_hash['CONFIGURATION_BUILD_DIR'].should.be.nil
           end

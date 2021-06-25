@@ -17,7 +17,7 @@ module Pod
           attr_reader :sandbox
 
           # @return [Pod::Project]
-          #         The `Pods/Pods.xcodeproj` to install the target into.
+          #         The project to install the target into.
           #
           attr_reader :project
 
@@ -91,11 +91,9 @@ module Pod
               settings['ARCHS'] = target.archs
             end
 
-            if target.requires_frameworks?
-              if target.static_framework?
-                settings['MACH_O_TYPE'] = 'staticlib'
-              end
-            else
+            if target.build_as_static_framework?
+              settings['MACH_O_TYPE'] = 'staticlib'
+            elsif target.build_as_static_library?
               settings.merge!('OTHER_LDFLAGS' => '', 'OTHER_LIBTOOLFLAGS' => '')
             end
 
@@ -137,10 +135,14 @@ module Pod
           # @param  [Symbol] bundle_package_type
           #         the CFBundlePackageType of the target this Info.plist file is for.
           #
+          # @param  [Hash] additional_entries
+          #         additional entries for the generated Info.plist
+          #
           # @return [void]
           #
-          def create_info_plist_file(path, native_target, version, platform, bundle_package_type = :fmwk)
-            create_info_plist_file_with_sandbox(@sandbox, path, native_target, version, platform, bundle_package_type)
+          def create_info_plist_file(path, native_target, version, platform, bundle_package_type = :fmwk, additional_entries: {})
+            create_info_plist_file_with_sandbox(@sandbox, path, native_target, version, platform, bundle_package_type,
+                                                :additional_entries => additional_entries)
             add_file_to_support_group(path)
           end
 
@@ -163,7 +165,8 @@ module Pod
               linked_path = target.module_map_path
               if path != linked_path
                 linked_path.dirname.mkpath
-                FileUtils.ln_sf(path, linked_path)
+                source = path.relative_path_from(linked_path.dirname)
+                FileUtils.ln_sf(source, linked_path)
               end
 
               relative_path_string = target.module_map_path.relative_path_from(sandbox.root).to_s
@@ -199,10 +202,11 @@ module Pod
               linked_path = target.umbrella_header_path
               if path != linked_path
                 linked_path.dirname.mkpath
-                FileUtils.ln_sf(path, linked_path)
+                source = path.relative_path_from(linked_path.dirname)
+                FileUtils.ln_sf(source, linked_path)
               end
 
-              acl = target.requires_frameworks? ? 'Public' : 'Project'
+              acl = target.build_as_framework? ? 'Public' : 'Project'
               build_file.settings ||= {}
               build_file.settings['ATTRIBUTES'] = [acl]
             end

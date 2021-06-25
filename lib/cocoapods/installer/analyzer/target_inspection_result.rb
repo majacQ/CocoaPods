@@ -30,6 +30,10 @@ module Pod
         #
         attr_reader :archs
 
+        # @return [Pathname] the path to the root of the project containing the user target
+        #
+        attr_reader :client_root
+
         # Initialize a new instance
         #
         # @param [TargetDefinition] target_definition @see #target_definition
@@ -46,6 +50,7 @@ module Pod
           @build_configurations = build_configurations
           @platform = platform
           @archs = archs
+          @client_root = Pathname.new(project.project_dir + project.root_object.project_dir_path).realpath
         end
       end
     end

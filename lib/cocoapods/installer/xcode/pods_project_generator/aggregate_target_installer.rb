@@ -6,6 +6,10 @@ module Pod
         # project and the relative support files.
         #
         class AggregateTargetInstaller < TargetInstaller
+          # @return [AggregateTarget] @see TargetInstaller#target
+          #
+          attr_reader :target
+
           # Creates the target in the Pods project and the relative support files.
           #
           # @return [TargetInstallationResult] the result of the installation of this target.
@@ -16,7 +20,7 @@ module Pod
               create_support_files_dir
               create_support_files_group
               create_xcconfig_file(native_target)
-              if target.requires_frameworks?
+              if target.build_as_framework?
                 create_info_plist_file(target.info_plist_path, native_target, target.version, target.platform)
                 create_module_map(native_target)
                 create_umbrella_header(native_target)
@@ -30,7 +34,7 @@ module Pod
               # cause an App Store rejection because frameworks cannot be
               # embedded in embedded targets.
               #
-              create_embed_frameworks_script if target.includes_frameworks? && !target.requires_host_target?
+              create_embed_frameworks_script if embed_frameworks_script_required?
               create_bridge_support_file(native_target)
               create_copy_resources_script if target.includes_resources?
               create_acknowledgements
@@ -73,6 +77,13 @@ module Pod
               'ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES' => 'NO',
             }
             super.merge(settings)
+          end
+
+          # @return [Boolean] whether this target requires an `Embed Frameworks` script phase
+          #
+          def embed_frameworks_script_required?
+            includes_dynamic_xcframeworks = target.xcframeworks_by_config.values.flatten.map(&:build_type).any?(&:dynamic_framework?)
+            (target.includes_frameworks? || includes_dynamic_xcframeworks) && !target.requires_host_target?
           end
 
           # Creates the group that holds the references to the support files
@@ -145,15 +156,15 @@ module Pod
           # Creates a script that embeds the frameworks to the bundle of the client
           # target.
           #
-          # @note   We can't use Xcode default copy bundle resource phase, because
-          #         we need to ensure that we only copy the resources, which are
+          # @note   We can't use Xcode default link libraries phase, because
+          #         we need to ensure that we only copy the frameworks which are
           #         relevant for the current build configuration.
           #
           # @return [void]
           #
           def create_embed_frameworks_script
             path = target.embed_frameworks_script_path
-            generator = Generator::EmbedFrameworksScript.new(target.framework_paths_by_config)
+            generator = Generator::EmbedFrameworksScript.new(target.framework_paths_by_config, target.xcframeworks_by_config)
             update_changed_file(generator, path)
             add_file_to_support_group(path)
           end

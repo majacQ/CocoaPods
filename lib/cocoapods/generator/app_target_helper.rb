@@ -88,9 +88,8 @@ module Pod
       #
       # @return [Array<PBXBuildFile>] the created build file references.
       #
-      def self.add_app_host_main_file(project, target, platform, name = 'App')
+      def self.add_app_host_main_file(project, target, platform, group, name = 'App')
         source_file = AppTargetHelper.create_app_host_main_file(project, platform, name)
-        group = project[name] || project.new_group(name, name)
         source_file_ref = group.new_file(source_file)
         target.add_file_references([source_file_ref])
       end
@@ -106,14 +105,16 @@ module Pod
       # @param  [Symbol] platform
       #         the platform of the target. Can be `:ios` or `:osx`, etc.
       #
+      # @param  [String] deployment_target
+      #         the deployment target for the platform.
+      #
       # @param  [String] name
       #         The name to use for the target, defaults to 'App'.
       #
       # @return [PBXFileReference] the created file reference of the launchscreen storyboard.
       #
-      def self.add_launchscreen_storyboard(project, target, name = 'App')
-        launch_storyboard_file = AppTargetHelper.create_launchscreen_storyboard_file(project, name)
-        group = project[name] || project.new_group(name, name)
+      def self.add_launchscreen_storyboard(project, target, group, deployment_target, name = 'App')
+        launch_storyboard_file = AppTargetHelper.create_launchscreen_storyboard_file(project, deployment_target, name)
         launch_storyboard_ref = group.new_file(launch_storyboard_file)
         target.resources_build_phase.add_file_reference(launch_storyboard_ref)
       end
@@ -126,9 +127,17 @@ module Pod
       # @return [void]
       #
       def self.add_xctest_search_paths(target)
+        requires_libs = target.platform_name == :ios &&
+          Version.new(target.deployment_target) < Version.new('12.2')
+
         target.build_configurations.each do |configuration|
-          search_paths = configuration.build_settings['FRAMEWORK_SEARCH_PATHS'] ||= '$(inherited)'
-          search_paths << ' "$(PLATFORM_DIR)/Developer/Library/Frameworks"'
+          framework_search_paths = configuration.build_settings['FRAMEWORK_SEARCH_PATHS'] ||= '$(inherited)'
+          framework_search_paths << ' "$(PLATFORM_DIR)/Developer/Library/Frameworks"'
+
+          if requires_libs
+            library_search_paths = configuration.build_settings['LIBRARY_SEARCH_PATHS'] ||= '$(inherited)'
+            library_search_paths << ' "$(PLATFORM_DIR)/Developer/usr/lib"'
+          end
         end
       end
 
@@ -201,15 +210,22 @@ module Pod
       # @param  [Project] project
       #         the Xcodeproj to generate the launchscreen storyboard into.
       #
+      # @param  [String] deployment_target
+      #         the deployment target for the platform.
+      #
       # @param  [String] name
       #         The name of the folder to use and save the generated launchscreen storyboard file.
       #
       # @return [Pathname] the new launchscreen storyboard file that was generated.
       #
-      def self.create_launchscreen_storyboard_file(project, name = 'App')
+      def self.create_launchscreen_storyboard_file(project, deployment_target, name = 'App')
         launch_storyboard_file = project.path.dirname.+("#{name}/LaunchScreen.storyboard")
         launch_storyboard_file.parent.mkpath
-        File.write(launch_storyboard_file, LAUNCHSCREEN_STORYBOARD_CONTENTS)
+        if Version.new(deployment_target) >= Version.new('9.0')
+          File.write(launch_storyboard_file, LAUNCHSCREEN_STORYBOARD_CONTENTS)
+        else
+          File.write(launch_storyboard_file, LAUNCHSCREEN_STORYBOARD_CONTENTS_IOS_8)
+        end
         launch_storyboard_file
       end
 
@@ -252,7 +268,7 @@ module Pod
 
 @implementation CPTestAppHostAppDelegate
 
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+- (BOOL)application:(UIApplication *)__unused application didFinishLaunchingWithOptions:(NSDictionary *)__unused launchOptions
 {
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     self.window.rootViewController = [UIViewController new];
@@ -280,6 +296,36 @@ int main(int argc, const char * argv[]) {
     return NSApplicationMain(argc, argv);
 }
 EOS
+
+      LAUNCHSCREEN_STORYBOARD_CONTENTS_IOS_8 = <<-XML.strip_heredoc.freeze
+              <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+              <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="13122.16" systemVersion="17A277" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
+                <dependencies>
+                  <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="13104.12"/>
+                  <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+                </dependencies>
+                <scenes>
+                  <!--View Controller-->
+                  <scene sceneID="EHf-IW-A2E">
+                    <objects>
+                      <viewController id="01J-lp-oVM" sceneMemberID="viewController">
+                        <layoutGuides>
+                          <viewControllerLayoutGuide type="top" id="rUq-ht-380"/>
+                          <viewControllerLayoutGuide type="bottom" id="a9l-8d-mfx"/>
+                        </layoutGuides>
+                        <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
+                          <rect key="frame" x="0.0" y="0.0" width="375" height="667"/>
+                          <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                          <color key="backgroundColor" red="1" green="1" blue="1" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        </view>
+                      </viewController>
+                      <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
+                    </objects>
+                    <point key="canvasLocation" x="53" y="375"/>
+                  </scene>
+                </scenes>
+              </document>
+      XML
 
       LAUNCHSCREEN_STORYBOARD_CONTENTS = <<-XML.strip_heredoc.freeze
               <?xml version="1.0" encoding="UTF-8" standalone="no"?>

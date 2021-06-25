@@ -6,6 +6,28 @@ module Pod
       SpecHelper.create_sample_app_copy_from_fixture('SampleProject')
     end
 
+    describe '#compute_results' do
+      it 'checks the path' do
+        target_definition = Podfile::TargetDefinition.new('UserTarget', nil)
+        user_project = Xcodeproj::Project.new('UserProject.xcodeproj')
+        user_project.new_target(:application, 'UserTarget', :ios)
+        target_inspector = TargetInspector.new(target_definition, config.installation_root)
+        results = target_inspector.send(:compute_results, user_project)
+        results.client_root.to_s.should == Dir.getwd.to_s
+      end
+
+      it 'checks the adjusted path' do
+        target_definition = Podfile::TargetDefinition.new('UserTarget', nil)
+        user_project = Xcodeproj::Project.new('UserProject.xcodeproj')
+        user_project.new_target(:application, 'UserTarget', :ios)
+        user_project.root_object.stubs(:project_dir_path).returns('../')
+        target_inspector = TargetInspector.new(target_definition, config.installation_root)
+        results = target_inspector.send(:compute_results, user_project)
+        results.client_root.to_s.should.not.include Dir.getwd.to_s
+        Dir.getwd.to_s.should.include results.client_root.to_s
+      end
+    end
+
     describe '#compute_project_path' do
       it 'uses the path specified in the target definition while computing the path of the user project' do
         target_definition = Podfile::TargetDefinition.new(:default, nil)
@@ -59,7 +81,7 @@ module Pod
     describe '#compute_targets' do
       it 'returns the targets specified in the target definition' do
         target_definition = Podfile::TargetDefinition.new('UserTarget', nil)
-        user_project = Xcodeproj::Project.new('path')
+        user_project = Xcodeproj::Project.new('UserProject.xcodeproj')
         user_project.new_target(:application, 'FirstTarget', :ios)
         user_project.new_target(:application, 'UserTarget', :ios)
 
@@ -70,11 +92,11 @@ module Pod
 
       it 'raises if it is unable to find the targets specified by the target definition' do
         target_definition = Podfile::TargetDefinition.new('UserTarget', nil)
-        user_project = Xcodeproj::Project.new('path')
+        user_project = Xcodeproj::Project.new('UserProject.xcodeproj')
 
         target_inspector = TargetInspector.new(target_definition, config.installation_root)
         e = lambda { target_inspector.send(:compute_targets, user_project) }.should.raise Informative
-        e.message.should.match /Unable to find a target named `UserTarget`/
+        e.message.should.match /Unable to find a target named `UserTarget` in project `UserProject.xcodeproj`/
       end
 
       it 'suggests project native target names if the target cannot be found' do
@@ -232,7 +254,7 @@ module Pod
         target_inspector = TargetInspector.new(target_definition, config.installation_root)
         platforms = target_inspector.send(:compute_platform, user_targets)
         platforms.should == Platform.new(:ios, '4.0')
-        UI.warnings.should.include 'Automatically assigning platform `ios` with version `4.0` on target `default` because no ' \
+        UI.warnings.should.include 'Automatically assigning platform `iOS` with version `4.0` on target `default` because no ' \
           'platform was specified. Please specify a platform for this target in your Podfile. ' \
           'See `https://guides.cocoapods.org/syntax/podfile.html#platform`.'
       end
@@ -303,8 +325,9 @@ module Pod
         target_inspector.send(:compute_swift_version_from_targets, user_targets).should.equal '2.3'
       end
 
-      it 'returns nil if the version is not defined' do
+      it 'returns default if the version is not defined' do
         user_project = Xcodeproj::Project.new('path')
+        user_project.build_configuration_list.set_setting('SWIFT_VERSION', nil)
         target = user_project.new_target(:application, 'Target', :ios)
         target.build_configuration_list.set_setting('SWIFT_VERSION', nil)
 
@@ -312,7 +335,7 @@ module Pod
         user_targets = [target]
 
         target_inspector = TargetInspector.new(target_definition, config.installation_root)
-        target_inspector.send(:compute_swift_version_from_targets, user_targets).should.equal nil
+        target_inspector.send(:compute_swift_version_from_targets, user_targets).should.nil?
       end
 
       it 'raises if the user defined SWIFT_VERSION contains multiple unique versions are defined' do
@@ -373,6 +396,13 @@ module Pod
           FileUtils.rm_f(@user_xcconfig) if File.exist?(@user_xcconfig)
         end
 
+        it 'verify path adjustments are made to config path' do
+          user_project = Xcodeproj::Project.new('path')
+          sample_config = user_project.new_file(@user_xcconfig)
+          user_project.root_object.stubs(:project_dir_path).returns('foo')
+          sample_config.real_path.to_s.should.include 'foo/User.xcconfig'
+        end
+
         it 'returns the xcconfig-level SWIFT_VERSION if the target has an existing user xcconfig set' do
           user_project = Xcodeproj::Project.new('path')
           user_project.build_configuration_list.set_setting('SWIFT_VERSION', '2.3')
@@ -382,6 +412,39 @@ module Pod
           target.build_configurations.each do |config|
             config.base_configuration_reference = sample_config
           end
+
+          target_definition = Podfile::TargetDefinition.new(:default, nil)
+          user_targets = [target]
+
+          target_inspector = TargetInspector.new(target_definition, config.installation_root)
+          target_inspector.send(:compute_swift_version_from_targets, user_targets).should.equal '3.0'
+        end
+
+        it 'returns the xcconfig-level SWIFT_VERSION if the target has an existing user xcconfig set but the file is missing' do
+          user_project = Xcodeproj::Project.new('path')
+          user_project.build_configuration_list.set_setting('SWIFT_VERSION', '2.3')
+          target = user_project.new_target(:application, 'Target', :ios)
+          sample_config = user_project.new_file(@user_xcconfig)
+          target.build_configurations.each do |config|
+            config.base_configuration_reference = sample_config
+          end
+
+          target_definition = Podfile::TargetDefinition.new(:default, nil)
+          user_targets = [target]
+
+          target_inspector = TargetInspector.new(target_definition, config.installation_root)
+          target_inspector.send(:compute_swift_version_from_targets, user_targets).should.equal '2.3'
+        end
+
+        it 'returns the xcconfig-level SWIFT_VERSION if the project has an existing user xcconfig set' do
+          user_project = Xcodeproj::Project.new('path')
+          sample_config = user_project.new_file(@user_xcconfig)
+          File.write(sample_config.real_path, 'SWIFT_VERSION=3.0')
+          user_project.build_configuration_list.build_configurations.each do |config|
+            config.build_settings.delete('SWIFT_VERSION')
+            config.base_configuration_reference = sample_config
+          end
+          target = user_project.new_target(:application, 'Target', :ios)
 
           target_definition = Podfile::TargetDefinition.new(:default, nil)
           user_targets = [target]

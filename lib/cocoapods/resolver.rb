@@ -1,5 +1,5 @@
 require 'molinillo'
-require 'cocoapods/resolver/lazy_specification'
+require 'cocoapods/podfile'
 
 module Pod
   class NoSpecFoundError < Informative
@@ -12,47 +12,8 @@ module Pod
   # by target for a given Podfile.
   #
   class Resolver
-    # A small container that wraps a resolved specification for a given target definition. Additional metadata
-    # is included here such as if the specification is only used by tests.
-    #
-    class ResolverSpecification
-      # @return [Specification] the specification that was resolved
-      #
-      attr_reader :spec
-
-      # @return [Source] the spec repo source the specification came from
-      #
-      attr_reader :source
-
-      # @return [Bool] whether this resolved specification is only used by tests.
-      #
-      attr_reader :used_by_tests_only
-      alias used_by_tests_only? used_by_tests_only
-
-      def initialize(spec, used_by_tests_only, source)
-        @spec = spec
-        @used_by_tests_only = used_by_tests_only
-        @source = source
-      end
-
-      def name
-        spec.name
-      end
-
-      def root
-        spec.root
-      end
-
-      def ==(other)
-        self.class == other &&
-          spec == other.spec &&
-          used_by_tests_only == other.test_only
-      end
-    end
-
-    include Pod::Installer::InstallationOptions::Mixin
-
-    delegate_installation_options { podfile }
+    require 'cocoapods/resolver/lazy_specification'
+    require 'cocoapods/resolver/resolver_specification'
 
     # @return [Sandbox] the Sandbox used by the resolver to find external
     #         dependencies.
@@ -78,6 +39,10 @@ module Pod
     attr_reader :specs_updated
     alias specs_updated? specs_updated
 
+    # @return [Source::Manager] the manager to use for dependency resolution
+    #
+    attr_reader :sources_manager
+
     # Init a new Resolver
     #
     # @param  [Sandbox] sandbox @see sandbox
@@ -89,15 +54,21 @@ module Pod
     #         within this Resolver.
     #
     def initialize(sandbox, podfile, locked_dependencies, sources, specs_updated,
-                   podfile_dependency_cache: Installer::Analyzer::PodfileDependencyCache.from_podfile(podfile))
+                   podfile_dependency_cache: Installer::Analyzer::PodfileDependencyCache.from_podfile(podfile),
+                   sources_manager: Config.instance.sources_manager)
       @sandbox = sandbox
       @podfile = podfile
       @locked_dependencies = locked_dependencies
       @sources = Array(sources)
       @specs_updated = specs_updated
       @podfile_dependency_cache = podfile_dependency_cache
+      @sources_manager = sources_manager
       @platforms_by_dependency = Hash.new { |h, k| h[k] = [] }
+
       @cached_sets = {}
+      @podfile_requirements_by_root_name = @podfile_dependency_cache.podfile_dependencies.group_by(&:root_name).each_value { |a| a.map!(&:requirement).freeze }.freeze
+      @search = {}
+      @validated_platforms = Set.new
     end
 
     #-------------------------------------------------------------------------#
@@ -118,7 +89,7 @@ module Pod
           next unless target.platform
           @platforms_by_dependency[dep].push(target.platform)
         end
-      end
+      end.uniq
       @platforms_by_dependency.each_value(&:uniq!)
       @activated = Molinillo::Resolver.new(self, self).resolve(dependencies, locked_dependencies)
       resolver_specs_by_target
@@ -134,17 +105,34 @@ module Pod
     def resolver_specs_by_target
       @resolver_specs_by_target ||= {}.tap do |resolver_specs_by_target|
         @podfile_dependency_cache.target_definition_list.each do |target|
+          next if target.abstract? && !target.platform
+
           # can't use vertex.root? since that considers _all_ targets
           explicit_dependencies = @podfile_dependency_cache.target_definition_dependencies(target).map(&:name).to_set
-          vertices = valid_dependencies_for_target(target)
 
-          resolver_specs_by_target[target] = vertices.
+          used_by_aggregate_target_by_spec_name = {}
+          used_vertices_by_spec_name = {}
+
+          # it's safe to make a single pass here since we iterate in topological order,
+          # so all of the predecessors have been visited before we get to a node.
+          # #tsort returns no-children vertices first, and we want them last (i.e. we want no-parent vertices first)
+          @activated.tsort.reverse_each do |vertex|
+            spec_name = vertex.name
+            explicitly_included = explicit_dependencies.include?(spec_name)
+            if explicitly_included || vertex.incoming_edges.any? { |edge| used_vertices_by_spec_name.key?(edge.origin.name) && edge_is_valid_for_target_platform?(edge, target.platform) }
+              validate_platform(vertex.payload, target)
+              used_vertices_by_spec_name[spec_name] = vertex
+              used_by_aggregate_target_by_spec_name[spec_name] = vertex.payload.library_specification? &&
+                (explicitly_included || vertex.predecessors.any? { |predecessor| used_by_aggregate_target_by_spec_name.fetch(predecessor.name, false) })
+            end
+          end
+
+          resolver_specs_by_target[target] = used_vertices_by_spec_name.each_value.
             map do |vertex|
               payload = vertex.payload
-              test_only = (!explicit_dependencies.include?(vertex.name) || payload.test_specification?) &&
-                (vertex.recursive_predecessors & vertices).all? { |v| !explicit_dependencies.include?(v.name) || v.payload.test_specification? }
+              non_library = !used_by_aggregate_target_by_spec_name.fetch(vertex.name)
               spec_source = payload.respond_to?(:spec_source) && payload.spec_source
-              ResolverSpecification.new(payload, test_only, spec_source)
+              ResolverSpecification.new(payload, non_library, spec_source)
             end.
             sort_by(&:name)
         end
@@ -167,10 +155,13 @@ module Pod
     # @param  [Dependency] dependency the dependency that is being searched for.
     #
     def search_for(dependency)
-      @search ||= {}
       @search[dependency] ||= begin
-        locked_requirement = requirement_for_locked_pod_named(dependency.name)
-        additional_requirements = Array(locked_requirement)
+        additional_requirements = if locked_requirement = requirement_for_locked_pod_named(dependency.name)
+                                    [locked_requirement]
+                                  else
+                                    Array(@podfile_requirements_by_root_name[dependency.root_name])
+                                  end
+
         specifications_for_dependency(dependency, additional_requirements)
       end
       @search[dependency].dup
@@ -238,7 +229,7 @@ module Pod
     end
 
     def valid_possibility_version_for_root_name?(requirement, activated, spec)
-      prerelease_requirement = requirement.prerelease? || requirement.external_source || !spec.version.prerelease?
+      return true if prerelease_requirement = requirement.prerelease? || requirement.external_source || !spec.version.prerelease?
 
       activated.each do |vertex|
         next unless vertex.payload
@@ -363,10 +354,11 @@ module Pod
     # @return [Array<Specification>] List of specifications satisfying given requirements.
     #
     def specifications_for_dependency(dependency, additional_requirements = [])
-      requirement = Requirement.new(dependency.requirement.as_list + additional_requirements.flat_map(&:as_list))
+      requirement_list = dependency.requirement.as_list + additional_requirements.flat_map(&:as_list)
+      requirement_list.uniq!
+      requirement = Requirement.new(requirement_list)
       find_cached_set(dependency).
-        all_specifications(installation_options.warn_for_multiple_pod_sources).
-        select { |s| requirement.satisfied_by? s.version }.
+        all_specifications(warn_for_multiple_pod_sources, requirement).
         map { |s| s.subspec_by_name(dependency.name, false, true) }.
         compact
     end
@@ -381,7 +373,7 @@ module Pod
     #
     def find_cached_set(dependency)
       name = dependency.root_name
-      unless cached_sets[name]
+      cached_sets[name] ||= begin
         if dependency.external_source
           spec = sandbox.specification(name)
           unless spec
@@ -392,12 +384,13 @@ module Pod
         else
           set = create_set_from_sources(dependency)
         end
-        cached_sets[name] = set
+
         unless set
           raise Molinillo::NoSuchDependencyError.new(dependency) # rubocop:disable Style/RaiseArgs
         end
+
+        set
       end
-      cached_sets[name]
     end
 
     # @return [Requirement, Nil]
@@ -427,7 +420,9 @@ module Pod
     #
     def aggregate_for_dependency(dependency)
       if dependency && dependency.podspec_repo
-        return Config.instance.sources_manager.aggregate_for_dependency(dependency)
+        sources_manager.aggregate_for_dependency(dependency)
+      elsif (locked_vertex = @locked_dependencies.vertex_named(dependency.name)) && (locked_dependency = locked_vertex.payload) && locked_dependency.podspec_repo
+        sources_manager.aggregate_for_dependency(locked_dependency)
       else
         @aggregate ||= Source::Aggregate.new(sources)
       end
@@ -441,10 +436,11 @@ module Pod
     #
     def validate_platform(spec, target)
       return unless target_platform = target.platform
+      return unless @validated_platforms.add?([spec.object_id, target_platform])
       unless spec.available_platforms.any? { |p| target_platform.to_sym == p.to_sym }
         raise Informative, "The platform of the target `#{target.name}` "     \
           "(#{target.platform}) is not compatible with `#{spec}`, which does "  \
-          "not support `#{target.platform.name}`."
+          "not support `#{target.platform.string_name}`."
       end
     end
 
@@ -457,6 +453,9 @@ module Pod
     def handle_resolver_error(error)
       message = error.message
       type = Informative
+      unless specs_updated?
+        specs_update_message = "\n * out-of-date source repos which you can update with `pod repo update` or with `pod install --repo-update`."
+      end
       case error
       when Molinillo::VersionConflict
         message = error.message_with_trees(
@@ -468,9 +467,15 @@ module Pod
             if local_pod_parent && !specifications_for_dependency(conflict.requirement).empty? && !conflict.possibility && conflict.locked_requirement
               # Conflict was caused by a requirement from a local dependency.
               # Tell user to use `pod update`.
-              o << "\nIt seems like you've changed the constraints of dependency `#{name}` " \
-              "inside your development pod `#{local_pod_parent.name}`.\nYou should run `pod update #{name}` to apply " \
-              "changes you've made."
+              o << "\n\nYou have either:#{specs_update_message}" \
+                   "\n * changed the constraints of dependency `#{name}` inside your development pod `#{local_pod_parent.name}`." \
+                   "\n   You should run `pod update #{name}` to apply changes you've made."
+            elsif !conflict.possibility && conflict.locked_requirement && conflict.locked_requirement.external_source && conflict.locked_requirement.external_source[:podspec] &&
+                                           conflict.requirement && conflict.requirement.external_source && conflict.requirement.external_source[:podspec]
+              # The internal version of the Podspec doesn't match the external definition of a podspec
+              o << "\nIt seems like you've changed the version of the dependency `#{name}` " \
+              "and it differs from the version stored in `Pods/Local Podspecs`.\nYou should run `pod update #{name} --no-repo-update` to apply " \
+              'changes made locally.'
             elsif (conflict.possibility && conflict.possibility.version.prerelease?) &&
                 (conflict.requirement && !(
                 conflict.requirement.prerelease? ||
@@ -494,13 +499,9 @@ module Pod
                 dependencies = conflicts.count == 1 ? 'dependency' : 'dependencies'
                 o << "\nNone of your spec sources contain a spec satisfying "\
                   "the #{dependencies}: `#{conflicts.join(', ')}`." \
-                  "\n\nYou have either:"
-                unless specs_updated?
-                  o << "\n * out-of-date source repos which you can update with `pod repo update` or with `pod install --repo-update`."
-                end
-                o << "\n * mistyped the name or version." \
-                  "\n * not added the source repo that hosts the Podspec to your Podfile." \
-                  "\n\nNote: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by default."
+                  "\n\nYou have either:#{specs_update_message}" \
+                  "\n * mistyped the name or version." \
+                  "\n * not added the source repo that hosts the Podspec to your Podfile."
 
               else
                 o << "\nSpecs satisfying the `#{conflicts.join(', ')}` dependency were found, " \
@@ -509,6 +510,14 @@ module Pod
             end
           end,
         )
+      when Molinillo::NoSuchDependencyError
+        message += <<-EOS
+
+
+You have either:#{specs_update_message}
+ * mistyped the name or version.
+ * not added the source repo that hosts the Podspec to your Podfile.
+        EOS
       end
       raise type.new(message).tap { |e| e.set_backtrace(error.backtrace) }
     end
@@ -520,9 +529,10 @@ module Pod
     #
     # @param  [Dependency] dependency
     #
-    # @param  [Specification] specification
+    # @param  [Specification] spec
     #
     # @return [Bool]
+    #
     def spec_is_platform_compatible?(dependency_graph, dependency, spec)
       # This is safe since a pod will only be in locked dependencies if we're
       # using the same exact version
@@ -538,36 +548,29 @@ module Pod
       platforms_to_satisfy.all? do |platform_to_satisfy|
         available_platforms.all? do |spec_platform|
           next true unless spec_platform.name == platform_to_satisfy.name
+          # For non library specs all we care is to match by the platform name, not to satisfy the version.
+          next true if spec.non_library_specification?
           platform_to_satisfy.supports?(spec_platform)
         end
       end
     end
 
-    # Returns the target-appropriate nodes that are `successors` of `node`,
-    # rejecting those that are scoped by target platform and have incompatible
-    # targets.
-    #
-    # @return [Array<Molinillo::DependencyGraph::Vertex>]
-    #         An array of target-appropriate nodes whose `payload`s are
-    #         dependencies for `target`.
-    #
-    def valid_dependencies_for_target(target)
-      dependencies = Set.new
-      @podfile_dependency_cache.target_definition_dependencies(target).each do |dep|
-        node = @activated.vertex_named(dep.name)
-        add_valid_dependencies_from_node(node, target, dependencies)
+    class EdgeAndPlatform
+      def initialize(edge, target_platform)
+        @edge = edge
+        @target_platform = target_platform
       end
-      dependencies
-    end
+      attr_reader :edge, :target_platform
 
-    def add_valid_dependencies_from_node(node, target, dependencies)
-      return unless dependencies.add?(node)
-      validate_platform(node.payload, target)
-      node.outgoing_edges.each do |edge|
-        next unless edge_is_valid_for_target_platform?(edge, target.platform)
-        add_valid_dependencies_from_node(edge.destination, target, dependencies)
+      def eql?(other)
+        edge.equal?(other.edge) && target_platform.eql?(other.target_platform)
+      end
+
+      def hash
+        edge.object_id ^ target_platform.hash
       end
     end
+    private_constant :EdgeAndPlatform
 
     # Whether the given `edge` should be followed to find dependencies for the
     # given `target_platform`.
@@ -575,11 +578,23 @@ module Pod
     # @return [Bool]
     #
     def edge_is_valid_for_target_platform?(edge, target_platform)
-      requirement_name = edge.requirement.name
+      @edge_validity ||= Hash.new do |hash, edge_and_platform|
+        e = edge_and_platform.edge
+        platform = edge_and_platform.target_platform
+        requirement_name = e.requirement.name
 
-      edge.origin.payload.all_dependencies(target_platform).any? do |dep|
-        dep.name == requirement_name
+        hash[edge_and_platform] = e.origin.payload.all_dependencies(platform).any? do |dep|
+          dep.name == requirement_name
+        end
       end
+
+      @edge_validity[EdgeAndPlatform.new(edge, target_platform)]
+    end
+
+    # @return [Boolean] whether to emit a warning when a pod is found in multiple sources
+    #
+    def warn_for_multiple_pod_sources
+      podfile.installation_options.warn_for_multiple_pod_sources
     end
   end
 end

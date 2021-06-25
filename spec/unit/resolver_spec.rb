@@ -251,8 +251,14 @@ module Pod
         message = should.raise Informative do
           @resolver.resolve
         end.message
-        message.should.match /Unable to find a specification/
-        message.should.match /`Windows` depended upon by `BlocksKit`/
+        message.should.include <<-EOS.strip
+[!] Unable to find a specification for `Windows` depended upon by `BlocksKit`
+
+You have either:
+ * out-of-date source repos which you can update with `pod repo update` or with `pod install --repo-update`.
+ * mistyped the name or version.
+ * not added the source repo that hosts the Podspec to your Podfile.
+        EOS
       end
 
       it 'does not raise if all dependencies are supported by the platform of the target definition' do
@@ -333,130 +339,6 @@ module Pod
         )
       end
 
-      it 'handles test only dependencies correctly' do
-        @podfile = Podfile.new do
-          platform :ios
-          pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
-        end
-        spec = Spec.new do |s|
-          s.name         = 'MainSpec'
-          s.version      = '1.2.3'
-          s.platform     = :ios
-
-          s.test_spec 'Tests' do |tss|
-            tss.source_files = 'some/file'
-          end
-        end
-        config.sandbox.expects(:specification).with('MainSpec').returns(spec)
-        resolver = create_resolver
-        resolved_specs = resolver.resolve.values.flatten
-        spec_names = resolved_specs.map(&:name).sort
-        spec_names.should == %w(
-          MainSpec MainSpec/Tests
-        )
-        resolved_specs.find { |rs| rs.name == 'MainSpec' }.used_by_tests_only?.should.be.false
-        resolved_specs.find { |rs| rs.name == 'MainSpec/Tests' }.used_by_tests_only?.should.be.true
-      end
-
-      it 'handles test only transitive dependencies' do
-        @podfile = Podfile.new do
-          platform :ios
-          pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
-        end
-        spec = Spec.new do |s|
-          s.name         = 'MainSpec'
-          s.version      = '1.2.3'
-          s.platform     = :ios
-
-          s.test_spec 'Tests' do |tss|
-            tss.source_files = 'some/file'
-            tss.dependency 'Expecta'
-          end
-        end
-        config.sandbox.expects(:specification).with('MainSpec').returns(spec)
-        resolver = create_resolver
-        resolved_specs = resolver.resolve.values.flatten
-        spec_names = resolved_specs.map(&:name).sort
-        spec_names.should == %w(
-          Expecta MainSpec MainSpec/Tests
-        )
-        resolved_specs.find { |rs| rs.name == 'Expecta' }.used_by_tests_only?.should.be.true
-        resolved_specs.find { |rs| rs.name == 'MainSpec' }.used_by_tests_only?.should.be.false
-        resolved_specs.find { |rs| rs.name == 'MainSpec/Tests' }.used_by_tests_only?.should.be.true
-      end
-
-      it 'handles test only dependencies when they are also required by sources' do
-        @podfile = Podfile.new do
-          platform :ios
-          pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
-        end
-        spec = Spec.new do |s|
-          s.name         = 'MainSpec'
-          s.version      = '1.2.3'
-          s.platform     = :ios
-          s.dependency 'Expecta'
-
-          s.test_spec 'Tests' do |tss|
-            tss.source_files = 'some/file'
-            tss.dependency 'Expecta'
-          end
-        end
-        config.sandbox.expects(:specification).with('MainSpec').returns(spec)
-        resolver = create_resolver
-        resolved_specs = resolver.resolve.values.flatten
-        spec_names = resolved_specs.map(&:name).sort
-        spec_names.should == %w(
-          Expecta MainSpec MainSpec/Tests
-        )
-        resolved_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_tests_only
-        resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_tests_only
-        resolved_specs.find { |rs| rs.name == 'MainSpec/Tests' }.should.be.used_by_tests_only
-      end
-
-      it 'handles test only dependencies when they are also used in a different target' do
-        @podfile = Podfile.new do
-          platform :ios, '10'
-
-          target 'A' do
-            pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
-          end
-
-          target 'B' do
-            pod 'Expecta'
-            pod 'OCMock'
-          end
-        end
-        spec = Spec.new do |s|
-          s.name         = 'MainSpec'
-          s.version      = '1.2.3'
-          s.platform     = :ios
-          s.dependency 'Expecta'
-
-          s.test_spec 'Tests' do |tss|
-            tss.source_files = 'some/file'
-            tss.dependency 'Expecta'
-            tss.dependency 'OCMock'
-          end
-        end
-        config.sandbox.expects(:specification).with('MainSpec').returns(spec)
-        resolver = create_resolver
-        resolved_specs = resolver.resolve
-
-        a_specs = resolved_specs[@podfile.target_definitions['A']]
-        b_specs = resolved_specs[@podfile.target_definitions['B']]
-
-        a_specs.map(&:name).sort.should == %w(Expecta MainSpec MainSpec/Tests OCMock)
-        b_specs.map(&:name).sort.should == %w(Expecta OCMock)
-
-        a_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_tests_only
-        a_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_tests_only
-        a_specs.find { |rs| rs.name == 'MainSpec/Tests' }.should.be.used_by_tests_only
-        a_specs.find { |rs| rs.name == 'OCMock' }.should.be.used_by_tests_only
-
-        b_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_tests_only
-        b_specs.find { |rs| rs.name == 'OCMock' }.should.not.be.used_by_tests_only
-      end
-
       it 'allows pre-release spec versions when a requirement has an ' \
          'external source' do
         @podfile = Podfile.new do
@@ -491,6 +373,29 @@ module Pod
 
     JSONKit (= 1.5pre)
         EOS
+      end
+
+      it 'raises with extra metadata if it finds two conflicting explicit dependencies which are :podspec' do
+        podspec_path = fixture('integration/Reachability/')
+        podfile = Podfile.new do
+          platform :ios
+          pod 'Reachability', :podspec => podspec_path
+        end
+
+        locked_dep = Dependency.new('Reachability', Requirement.create('= 3.0.0'))
+        locked_dep.external_source = { :podspec => podspec_path }
+        locked_deps = dependency_graph_from_array([locked_dep])
+
+        spec = Spec.new do |s|
+          s.name         = 'Reachability'
+          s.version      = '2.9.0' # it's 3.0.0 in the integration fixture
+        end
+        config.sandbox.expects(:specification).with('Reachability').returns(spec)
+
+        resolver = create_resolver(podfile, locked_deps)
+        e = lambda { resolver.resolve }.should.raise Informative
+        e.message.should.include "It seems like you've changed the version of the dependency `Reachability`"
+        e.message.should.include 'should run `pod update Reachability --no-repo-update` to apply changes made locally.'
       end
 
       it 'raises if it finds two conflicting dependencies' do
@@ -531,8 +436,6 @@ You have either:
  * out-of-date source repos which you can update with `pod repo update` or with `pod install --repo-update`.
  * mistyped the name or version.
  * not added the source repo that hosts the Podspec to your Podfile.
-
-Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by default.
         EOS
         e.exit_status.should.equal(31)
       end
@@ -554,8 +457,6 @@ None of your spec sources contain a spec satisfying the dependency: `AFNetworkin
 You have either:
  * mistyped the name or version.
  * not added the source repo that hosts the Podspec to your Podfile.
-
-Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by default.
         EOS
         e.exit_status.should.equal(31)
       end
@@ -583,8 +484,6 @@ You have either:
  * out-of-date source repos which you can update with `pod repo update` or with `pod install --repo-update`.
  * mistyped the name or version.
  * not added the source repo that hosts the Podspec to your Podfile.
-
-Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by default.
         EOS
         e.exit_status.should.equal(31)
       end
@@ -673,6 +572,357 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
 
     #-------------------------------------------------------------------------#
 
+    describe 'non-library only specs' do
+      describe 'test specs' do
+        def create_resolver(podfile = @podfile, locked_deps = empty_graph, specs_updated = false)
+          @resolver = Resolver.new(config.sandbox, podfile, locked_deps, config.sources_manager.all, specs_updated)
+        end
+
+        it 'handles test only dependencies correctly' do
+          @podfile = Podfile.new do
+            platform :ios
+            pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+
+            s.test_spec 'Tests' do |tss|
+              tss.source_files = 'some/file'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve.values.flatten
+          spec_names = resolved_specs.map(&:name).sort
+          spec_names.should == %w(
+            MainSpec MainSpec/Tests
+          )
+          resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec/Tests' }.should.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles test only transitive dependencies' do
+          @podfile = Podfile.new do
+            platform :ios
+            pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+
+            s.test_spec 'Tests' do |tss|
+              tss.source_files = 'some/file'
+              tss.dependency 'Expecta'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve.values.flatten
+          spec_names = resolved_specs.map(&:name).sort
+          spec_names.should == %w(
+            Expecta MainSpec MainSpec/Tests
+          )
+          resolved_specs.find { |rs| rs.name == 'Expecta' }.should.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec/Tests' }.should.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles test only dependencies when they are also required by sources' do
+          @podfile = Podfile.new do
+            platform :ios
+            pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+            s.dependency 'Expecta'
+
+            s.test_spec 'Tests' do |tss|
+              tss.source_files = 'some/file'
+              tss.dependency 'Expecta'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve.values.flatten
+          spec_names = resolved_specs.map(&:name).sort
+          spec_names.should == %w(
+            Expecta MainSpec MainSpec/Tests
+          )
+          resolved_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec/Tests' }.should.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles test only dependencies when they are also used in a different target' do
+          @podfile = Podfile.new do
+            platform :ios, '10'
+
+            target 'A' do
+              pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
+            end
+
+            target 'B' do
+              pod 'Expecta'
+              pod 'OCMock'
+            end
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+            s.dependency 'Expecta'
+
+            s.test_spec 'Tests' do |tss|
+              tss.source_files = 'some/file'
+              tss.dependency 'Expecta'
+              tss.dependency 'OCMock'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve
+
+          a_specs = resolved_specs[@podfile.target_definitions['A']]
+          b_specs = resolved_specs[@podfile.target_definitions['B']]
+
+          a_specs.map(&:name).sort.should == %w(Expecta MainSpec MainSpec/Tests OCMock)
+          b_specs.map(&:name).sort.should == %w(Expecta OCMock)
+
+          a_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_non_library_targets_only?
+          a_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          a_specs.find { |rs| rs.name == 'MainSpec/Tests' }.should.be.used_by_non_library_targets_only?
+          a_specs.find { |rs| rs.name == 'OCMock' }.should.be.used_by_non_library_targets_only?
+
+          b_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_non_library_targets_only?
+          b_specs.find { |rs| rs.name == 'OCMock' }.should.not.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles test only dependencies when they are an app spec' do
+          @podfile = Podfile.new do
+            platform :ios, '10'
+
+            target 'A' do
+              pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests'], :appspecs => ['App']
+            end
+            target 'B' do
+              pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests']
+            end
+            target 'C' do
+              pod 'MainSpec', :git => 'GIT-URL', :appspecs => ['App']
+            end
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+
+            s.test_spec 'Tests' do |tss|
+              tss.source_files = 'some/file'
+              tss.dependency 'MainSpec/App'
+            end
+
+            s.app_spec 'App' do |as|
+              as.source_files = 'some/file'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve
+
+          a_specs = resolved_specs[@podfile.target_definitions['A']]
+          b_specs = resolved_specs[@podfile.target_definitions['B']]
+          c_specs = resolved_specs[@podfile.target_definitions['C']]
+
+          a_specs.sort_by(&:name).map { |s| [s.name, s.used_by_non_library_targets_only?] }.should == [
+            ['MainSpec', false],
+            ['MainSpec/App', true],
+            ['MainSpec/Tests', true],
+          ]
+          b_specs.sort_by(&:name).map { |s| [s.name, s.used_by_non_library_targets_only?] }.should == [
+            ['MainSpec', false],
+            ['MainSpec/App', true],
+            ['MainSpec/Tests', true],
+          ]
+          c_specs.sort_by(&:name).map { |s| [s.name, s.used_by_non_library_targets_only?] }.should == [
+            ['MainSpec', false],
+            ['MainSpec/App', true],
+          ]
+        end
+
+        it 'handles non library specs having a non supported deployment target version' do
+          @podfile = Podfile.new do
+            platform :ios, '9.0'
+
+            target 'A' do
+              pod 'MainSpec', :git => 'GIT-URL', :testspecs => ['Tests'], :appspecs => ['App']
+            end
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+            s.ios.deployment_target = '9.0'
+
+            s.test_spec 'Tests' do |tss|
+              tss.ios.deployment_target = '10.0'
+              tss.source_files = 'some/file'
+              tss.dependency 'MainSpec/App'
+            end
+            s.app_spec 'App' do |as|
+              as.ios.deployment_target = '11.0'
+              as.source_files = 'some/file'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve
+          a_specs = resolved_specs[@podfile.target_definitions['A']]
+          a_specs.sort_by(&:name).map { |s| [s.name, s.used_by_non_library_targets_only?] }.should == [
+            ['MainSpec', false],
+            ['MainSpec/App', true],
+            ['MainSpec/Tests', true],
+          ]
+        end
+      end
+
+      describe 'app specs' do
+        def create_resolver(podfile = @podfile, locked_deps = empty_graph, specs_updated = false)
+          @resolver = Resolver.new(config.sandbox, podfile, locked_deps, config.sources_manager.all, specs_updated)
+        end
+
+        it 'handles app only dependencies correctly' do
+          @podfile = Podfile.new do
+            platform :ios
+            pod 'MainSpec', :git => 'GIT-URL', :appspecs => ['App']
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+
+            s.app_spec 'App' do |app_spec|
+              app_spec.source_files = 'some/file'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve.values.flatten
+          spec_names = resolved_specs.map(&:name).sort
+          spec_names.should == %w(
+            MainSpec MainSpec/App
+          )
+          resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec/App' }.should.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles app only transitive dependencies' do
+          @podfile = Podfile.new do
+            platform :ios
+            pod 'MainSpec', :git => 'GIT-URL', :appspecs => ['App']
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+
+            s.app_spec 'App' do |app_spec|
+              app_spec.source_files = 'some/file'
+              app_spec.dependency 'Expecta'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve.values.flatten
+          spec_names = resolved_specs.map(&:name).sort
+          spec_names.should == %w(
+            Expecta MainSpec MainSpec/App
+          )
+          resolved_specs.find { |rs| rs.name == 'Expecta' }.should.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec/App' }.should.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles app only dependencies when they are also required by sources' do
+          @podfile = Podfile.new do
+            platform :ios
+            pod 'MainSpec', :git => 'GIT-URL', :appspecs => ['App']
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+            s.dependency 'Expecta'
+
+            s.app_spec 'App' do |app_spec|
+              app_spec.source_files = 'some/file'
+              app_spec.dependency 'Expecta'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve.values.flatten
+          spec_names = resolved_specs.map(&:name).sort
+          spec_names.should == %w(
+            Expecta MainSpec MainSpec/App
+          )
+          resolved_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          resolved_specs.find { |rs| rs.name == 'MainSpec/App' }.should.be.used_by_non_library_targets_only?
+        end
+
+        it 'handles app only dependencies when they are also used in a different target' do
+          @podfile = Podfile.new do
+            platform :ios, '10'
+
+            target 'A' do
+              pod 'MainSpec', :git => 'GIT-URL', :appspecs => ['App']
+            end
+
+            target 'B' do
+              pod 'Expecta'
+              pod 'OCMock'
+            end
+          end
+          spec = Spec.new do |s|
+            s.name         = 'MainSpec'
+            s.version      = '1.2.3'
+            s.platform     = :ios
+            s.dependency 'Expecta'
+
+            s.app_spec 'App' do |app_spec|
+              app_spec.source_files = 'some/file'
+              app_spec.dependency 'Expecta'
+              app_spec.dependency 'OCMock'
+            end
+          end
+          config.sandbox.expects(:specification).with('MainSpec').returns(spec)
+          resolver = create_resolver
+          resolved_specs = resolver.resolve
+
+          a_specs = resolved_specs[@podfile.target_definitions['A']]
+          b_specs = resolved_specs[@podfile.target_definitions['B']]
+
+          a_specs.map(&:name).sort.should == %w(Expecta MainSpec MainSpec/App OCMock)
+          b_specs.map(&:name).sort.should == %w(Expecta OCMock)
+
+          a_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_non_library_targets_only?
+          a_specs.find { |rs| rs.name == 'MainSpec' }.should.not.be.used_by_non_library_targets_only?
+          a_specs.find { |rs| rs.name == 'MainSpec/App' }.should.be.used_by_non_library_targets_only?
+          a_specs.find { |rs| rs.name == 'OCMock' }.should.be.used_by_non_library_targets_only?
+
+          b_specs.find { |rs| rs.name == 'Expecta' }.should.not.be.used_by_non_library_targets_only?
+          b_specs.find { |rs| rs.name == 'OCMock' }.should.not.be.used_by_non_library_targets_only?
+        end
+      end
+    end
+
+    #-------------------------------------------------------------------------#
+
     describe 'Multiple sources' do
       it 'consults all sources when finding a matching spec' do
         podfile = Podfile.new do
@@ -680,13 +930,13 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
           pod 'JSONKit', '> 2'
         end
         file = fixture('spec-repos/test_repo/JSONKit/999.999.999/JSONKit.podspec')
-        sources = config.sources_manager.sources(%w(master test_repo))
+        sources = config.sources_manager.sources(%w(trunk test_repo))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         spec = resolver.resolve.values.flatten.first.spec
         spec.version.to_s.should == '999.999.999'
         spec.defined_in_file.should == file
 
-        sources = config.sources_manager.sources(%w(test_repo master))
+        sources = config.sources_manager.sources(%w(test_repo trunk))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         spec = resolver.resolve.values.flatten.first.spec
         spec.version.to_s.should == '999.999.999'
@@ -699,13 +949,13 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
           platform :ios
           pod 'JSONKit', '1.4'
         end
-        sources = config.sources_manager.sources(%w(master test_repo))
+        sources = config.sources_manager.sources(%w(trunk test_repo))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         spec = resolver.resolve.values.flatten.first.spec
         spec.version.to_s.should == '1.4'
-        spec.defined_in_file.should == fixture('spec-repos/master/Specs/1/3/f/JSONKit/1.4/JSONKit.podspec.json')
+        spec.defined_in_file.should == fixture('spec-repos/trunk/Specs/1/3/f/JSONKit/1.4/JSONKit.podspec.json')
 
-        sources = config.sources_manager.sources(%w(test_repo master))
+        sources = config.sources_manager.sources(%w(test_repo trunk))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         spec = resolver.resolve.values.flatten.first.spec
         spec.version.to_s.should == '1.4'
@@ -770,7 +1020,7 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
           pod 'JSONKit', '1.4', :source => test_repo_url
         end
 
-        sources = config.sources_manager.sources(%w(master test_repo))
+        sources = config.sources_manager.sources(%w(trunk test_repo))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         resolver.resolve
 
@@ -785,7 +1035,7 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
           pod 'JSONKit', '1.5pre', :source => test_repo_url
         end
 
-        sources = config.sources_manager.sources(%w(master))
+        sources = config.sources_manager.sources(%w(trunk))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         e = lambda { resolver.resolve }.should.raise Informative
         e.message.should.match(/None of your spec sources contain a spec/)
@@ -795,7 +1045,7 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
 
       it 'resolves a dependency with an explicit source even if it can\'t be ' \
          'resolved using the global sources' do
-        master_repo_url = config.sources_manager.source_with_name_or_url('master').url
+        master_repo_url = config.sources_manager.source_with_name_or_url('trunk').url
         podfile = Podfile.new do
           platform :ios
           pod 'JSONKit', '1.5pre', :source => master_repo_url
@@ -806,11 +1056,11 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         spec = resolver.resolve.values.flatten.first.spec
         spec.version.to_s.should == '1.5pre'
-        spec.defined_in_file.should == fixture('spec-repos/master/Specs/1/3/f/JSONKit/1.5pre/JSONKit.podspec.json')
+        spec.defined_in_file.should == fixture('spec-repos/trunk/Specs/1/3/f/JSONKit/1.5pre/JSONKit.podspec.json')
       end
 
       it 'uses explicit source repos for a dependency even when it\'s transitive' do
-        master_repo_url = config.sources_manager.source_with_name_or_url('master').url
+        master_repo_url = config.sources_manager.source_with_name_or_url('trunk').url
         test_repo_url = config.sources_manager.source_with_name_or_url('test_repo').url
 
         podfile = Podfile.new do
@@ -820,7 +1070,7 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
           pod 'JSONKit', '1.4', :source => test_repo_url
         end
 
-        sources = config.sources_manager.sources(%w(master test_repo))
+        sources = config.sources_manager.sources(%w(trunk test_repo))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         resolver.resolve
 
@@ -841,7 +1091,7 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
         end
 
         # CrossRepoDependent depends on AFNetworking which is only available in the master repo.
-        sources = config.sources_manager.sources(%w(master))
+        sources = config.sources_manager.sources(%w(trunk))
         resolver = Resolver.new(config.sandbox, podfile, empty_graph, sources, false)
         resolver.resolve
 
@@ -853,7 +1103,7 @@ Note: as of CocoaPods 1.0, `pod repo update` does not happen on `pod install` by
 
         afnetworking_spec = specs.find { |s| s.name == 'AFNetworking' }
         afnetworking_spec.should.not.be.nil
-        afnetworking_spec.defined_in_file.should == fixture('spec-repos/master/Specs/a/7/5/AFNetworking/2.4.0/AFNetworking.podspec.json')
+        afnetworking_spec.defined_in_file.should == fixture('spec-repos/trunk/Specs/a/7/5/AFNetworking/2.4.0/AFNetworking.podspec.json')
 
         # Check that if the master source is not available the dependency cannot be resolved.
         sources = config.sources_manager.sources(%w(test_repo))

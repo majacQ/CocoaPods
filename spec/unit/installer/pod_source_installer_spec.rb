@@ -5,10 +5,11 @@ module Pod
     FIXTURE_HEAD = Dir.chdir(SpecHelper.fixture('banana-lib')) { `git rev-parse HEAD`.chomp }
 
     before do
+      @podfile = Podfile.new
       @spec = fixture_spec('banana-lib/BananaLib.podspec')
       @spec.source = { :git => SpecHelper.fixture('banana-lib') }
       specs_by_platform = { :ios => [@spec] }
-      @installer = Installer::PodSourceInstaller.new(config.sandbox, specs_by_platform)
+      @installer = Installer::PodSourceInstaller.new(config.sandbox, @podfile, specs_by_platform)
     end
 
     #-------------------------------------------------------------------------#
@@ -27,6 +28,18 @@ module Pod
           @installer.install!
           pod_folder = config.sandbox.pod_dir('BananaLib')
           pod_folder.should.exist
+        end
+
+        it 'tries to remove stale local podspec if the source is not predownloaded, local or external' do
+          config.sandbox.expects(:remove_local_podspec).with('BananaLib').once
+          @installer.install!
+        end
+
+        it 'does not remove the local podspec if the source is local path' do
+          @spec.source = { :path => 'BananaLib.podspec' }
+          config.sandbox.store_local_path('BananaLib', 'BananaLib.podspec')
+          config.sandbox.expects(:remove_local_podspec).with('BananaLib').never
+          @installer.install!
         end
       end
 
@@ -52,6 +65,14 @@ module Pod
         Downloader.stubs(:download).returns(dummy_response)
         @installer.install!
         UI.warnings.should.include 'uses the unencrypted \'http\' protocol'
+      end
+
+      it 'does not show a warning if the source is http://localhost' do
+        @spec.source = { :http => 'http://localhost:123/sdk.zip' }
+        dummy_response = Pod::Downloader::Response.new
+        Downloader.stubs(:download).returns(dummy_response)
+        @installer.install!
+        UI.warnings.length.should.equal(0)
       end
 
       it 'shows a warning if the source is unencrypted with git://' do

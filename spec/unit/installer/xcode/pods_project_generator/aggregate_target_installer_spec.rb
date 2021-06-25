@@ -7,34 +7,18 @@ module Pod
         describe AggregateTargetInstaller do
           describe 'In General' do
             before do
-              config.sandbox.prepare
-              @podfile = Podfile.new do
-                platform :ios, '6.0'
-                project 'SampleProject/SampleProject'
-                target 'SampleProject'
-              end
-              @target_definition = @podfile.target_definitions['SampleProject']
+              @target_definition = fixture_target_definition('SampleProject')
               @project = Project.new(config.sandbox.project_path)
-
-              config.sandbox.project = @project
-              path_list = Sandbox::PathList.new(fixture('banana-lib'))
-              @spec = fixture_spec('banana-lib/BananaLib.podspec')
-              @spec.prefix_header_contents = '#import "BlocksKit.h"'
-              file_accessor = Sandbox::FileAccessor.new(path_list, @spec.consumer(:ios))
               @project.add_pod_group('BananaLib', fixture('banana-lib'))
-              group = @project.group_for_spec('BananaLib')
-              file_accessor.source_files.each do |file|
-                @project.add_file_reference(file, group)
-              end
-
-              @platform = Platform.new(:ios, '6.0')
-
+              @banana_spec = fixture_spec('banana-lib/BananaLib.podspec')
               user_build_configurations = { 'Debug' => :debug, 'Release' => :release, 'AppStore' => :release,
                                             'Test' => :debug }
-              @pod_target = PodTarget.new(config.sandbox, false, user_build_configurations, [], @platform, [@spec],
-                                          [@target_definition], [file_accessor])
+              @platform = Platform.new(:ios, '6.0')
+              @pod_target = fixture_pod_target(@banana_spec, BuildType.static_library, user_build_configurations, [], @platform,
+                                               [@target_definition])
+              FileReferencesInstaller.new(config.sandbox, [@pod_target], @project).install!
               pod_targets_by_config = Hash[user_build_configurations.each_key.map { |c| [c, [@pod_target]] }]
-              @target = AggregateTarget.new(config.sandbox, false, user_build_configurations, [], @platform,
+              @target = AggregateTarget.new(config.sandbox, BuildType.static_library, user_build_configurations, [], @platform,
                                             @target_definition, config.sandbox.root.dirname, nil, nil,
                                             pod_targets_by_config)
               @installer = AggregateTargetInstaller.new(config.sandbox, @project, @target)
@@ -157,7 +141,7 @@ module Pod
 
             it 'does not add framework resources to copy resources script' do
               @target.stubs(:includes_resources?).returns(true)
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
               @installer.install!
               support_files_dir = config.sandbox.target_support_files_dir('Pods-SampleProject')
               script = support_files_dir + 'Pods-SampleProject-resources.sh'
@@ -185,7 +169,7 @@ module Pod
             end
 
             it 'does add pods to the embed frameworks script' do
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
               @target.stubs(:requires_frameworks? => true)
               @installer.install!
               support_files_dir = config.sandbox.target_support_files_dir('Pods-SampleProject')
@@ -210,7 +194,7 @@ module Pod
 
             it 'does not add pods to the embed frameworks script if they are not to be built' do
               @pod_target.stubs(:should_build? => false)
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
               @target.stubs(:requires_frameworks? => true)
               @target.stubs(:includes_frameworks? => true)
               @installer.install!
@@ -220,8 +204,7 @@ module Pod
             end
 
             it 'does not add pods to the embed frameworks script if they are static' do
-              @pod_target.stubs(:static_framework? => true)
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.static_framework)
               @target.stubs(:requires_frameworks? => true)
               @target.stubs(:includes_frameworks? => true)
               @installer.install!
@@ -250,7 +233,7 @@ module Pod
             end
 
             it 'creates an embed frameworks script, if the target does not require a host target' do
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
               @target.stubs(:requires_frameworks? => true)
               @installer.install!
               support_files_dir = config.sandbox.target_support_files_dir('Pods-SampleProject')
@@ -259,7 +242,7 @@ module Pod
             end
 
             it 'does not create an embed frameworks script, if the target requires a host target' do
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
               @target.stubs(:requires_frameworks? => true)
               @target.stubs(:requires_host_target? => true)
               @installer.install!
@@ -269,7 +252,7 @@ module Pod
             end
 
             it 'does not create an embed frameworks script, if the target does not have frameworks to embed' do
-              @pod_target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
               @target.stubs(:requires_frameworks? => true)
               @target.stubs(:includes_frameworks? => false)
               @installer.install!
@@ -288,8 +271,8 @@ module Pod
             end
 
             it 'installs umbrella headers for frameworks' do
-              @pod_target.stubs(:requires_frameworks? => true)
-              @target.stubs(:requires_frameworks? => true)
+              @pod_target.stubs(:build_type => BuildType.dynamic_framework)
+              @target.stubs(:build_type => BuildType.static_framework)
               build_files = @installer.install!.native_target.headers_build_phase.files
               build_file = build_files.find { |bf| bf.file_ref.path.include?('Pods-SampleProject-umbrella.h') }
               build_file.should.not.be.nil
@@ -297,7 +280,7 @@ module Pod
             end
 
             it 'does not create xcconfigs for non existent user build configurations' do
-              target = AggregateTarget.new(config.sandbox, false, { 'Debug' => :debug }, [], @platform,
+              target = AggregateTarget.new(config.sandbox, BuildType.static_library, { 'Debug' => :debug }, [], @platform,
                                            @target_definition, config.sandbox.root.dirname, nil, nil, {})
               target.stubs(:includes_resources?).returns(true)
               target.stubs(:includes_frameworks?).returns(true)

@@ -17,8 +17,7 @@ module Pod
 
         def self.options
           [
-            ['--template-url=URL', 'The URL of the git repo containing a ' \
-                                  'compatible template'],
+            ['--template-url=URL', 'The URL of the git repo containing a compatible template'],
           ].concat(super)
         end
 
@@ -54,7 +53,7 @@ module Pod
 
         TEMPLATE_REPO = 'https://github.com/CocoaPods/pod-template.git'.freeze
         TEMPLATE_INFO_URL = 'https://github.com/CocoaPods/pod-template'.freeze
-        CREATE_NEW_POD_INFO_URL = 'http://guides.cocoapods.org/making/making-a-cocoapod'.freeze
+        CREATE_NEW_POD_INFO_URL = 'https://guides.cocoapods.org/making/making-a-cocoapod'.freeze
 
         # Clones the template from the remote in the working directory using
         # the name of the Pod.

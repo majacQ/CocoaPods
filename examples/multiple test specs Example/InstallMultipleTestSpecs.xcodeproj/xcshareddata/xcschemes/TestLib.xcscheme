@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "32328E3245A87C76B61535CFF79937B7"
+               BlueprintIdentifier = "09A26949C70A0A9776D6237D791960C9"
                BuildableName = "TestLib.framework"
                BlueprintName = "TestLib"
                ReferencedContainer = "container:Pods/Pods.xcodeproj">
@@ -32,7 +32,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "7F88B8209C145950A6760F859CA79F25"
+               BlueprintIdentifier = "D0BE50B728971E85AEA1D90D04EDEDFA"
                BuildableName = "TestLib-Unit-UnitTests1.xctest"
                BlueprintName = "TestLib-Unit-UnitTests1"
                ReferencedContainer = "container:Pods/Pods.xcodeproj">
@@ -42,7 +42,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "CA1257880D5712CC7CCCE797AD9C8298"
+               BlueprintIdentifier = "24F70FE3AEFB1838B068BFBF3642D3FF"
                BuildableName = "TestLib-Unit-UnitTests2.xctest"
                BlueprintName = "TestLib-Unit-UnitTests2"
                ReferencedContainer = "container:Pods/Pods.xcodeproj">
@@ -52,7 +52,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "32328E3245A87C76B61535CFF79937B7"
+            BlueprintIdentifier = "09A26949C70A0A9776D6237D791960C9"
             BuildableName = "TestLib.framework"
             BlueprintName = "TestLib"
             ReferencedContainer = "container:Pods/Pods.xcodeproj">
@@ -74,7 +74,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "32328E3245A87C76B61535CFF79937B7"
+            BlueprintIdentifier = "09A26949C70A0A9776D6237D791960C9"
             BuildableName = "TestLib.framework"
             BlueprintName = "TestLib"
             ReferencedContainer = "container:Pods/Pods.xcodeproj">
@@ -92,7 +92,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "32328E3245A87C76B61535CFF79937B7"
+            BlueprintIdentifier = "09A26949C70A0A9776D6237D791960C9"
             BuildableName = "TestLib.framework"
             BlueprintName = "TestLib"
             ReferencedContainer = "container:Pods/Pods.xcodeproj">

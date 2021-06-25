@@ -60,6 +60,11 @@ module Pod
     attr_accessor :silent
     alias_method :silent?, :silent
 
+    # @return [Bool] Whether CocoaPods is allowed to run as root.
+    #
+    attr_accessor :allow_root
+    alias_method :allow_root?, :allow_root
+
     # @return [Bool] Whether a message should be printed when a new version of
     #         CocoaPods is available.
     #
@@ -140,6 +145,8 @@ module Pod
 
     attr_writer :repos_dir
 
+    # @return [Source::Manager] the source manager for the spec repos in `repos_dir`
+    #
     def sources_manager
       return @sources_manager if @sources_manager && @sources_manager.repos_dir == repos_dir
       @sources_manager = Source::Manager.new(repos_dir)
@@ -155,13 +162,13 @@ module Pod
     #         Podfile is located.
     #
     def installation_root
-      current_dir = ActiveSupport::Multibyte::Unicode.normalize(Dir.pwd)
-      current_path = Pathname.new(current_dir)
-      unless @installation_root
+      @installation_root ||= begin
+        current_dir = Pathname.new(ActiveSupport::Multibyte::Unicode.normalize(Dir.pwd))
+        current_path = current_dir
         until current_path.root?
           if podfile_path_in_dir(current_path)
-            @installation_root = current_path
-            unless current_path == Pathname.pwd
+            installation_root = current_path
+            unless current_path == current_dir
               UI.puts("[in #{current_path}]")
             end
             break
@@ -169,9 +176,8 @@ module Pod
             current_path = current_path.parent
           end
         end
-        @installation_root ||= Pathname.pwd
+        installation_root || current_dir
       end
-      @installation_root
     end
 
     attr_writer :installation_root
@@ -276,7 +282,7 @@ module Pod
     def configure_with(values_by_key)
       return unless values_by_key
       values_by_key.each do |key, value|
-        if key == :cache_root
+        if key.to_sym == :cache_root
           value = Pathname.new(value).expand_path
         end
         instance_variable_set("@#{key}", value)
@@ -290,6 +296,7 @@ module Pod
       'CocoaPods.podfile.yaml',
       'CocoaPods.podfile',
       'Podfile',
+      'Podfile.rb',
     ].freeze
 
     public
@@ -305,11 +312,23 @@ module Pod
     def podfile_path_in_dir(dir)
       PODFILE_NAMES.each do |filename|
         candidate = dir + filename
-        if candidate.exist?
+        if candidate.file?
           return candidate
         end
       end
       nil
+    end
+
+    # Excludes the given dir from Time Machine backups.
+    #
+    # @param  [Pathname] dir
+    #         The directory to exclude from Time Machine backups.
+    #
+    # @return [void]
+    #
+    def exclude_from_backup(dir)
+      return if Gem.win_platform?
+      system('tmutil', 'addexclusion', dir.to_s, %i(out err) => File::NULL)
     end
 
     public

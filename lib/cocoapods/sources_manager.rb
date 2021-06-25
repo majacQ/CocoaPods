@@ -1,5 +1,8 @@
 require 'cocoapods-core/source'
+require 'netrc'
 require 'set'
+require 'rest'
+require 'yaml'
 
 module Pod
   class Source
@@ -15,33 +18,69 @@ module Pod
       #         The URL of the source.
       #
       def find_or_create_source_with_url(url)
-        unless source = source_with_url(url)
-          name = name_for_url(url)
-          # Hack to ensure that `repo add` output is shown.
-          previous_title_level = UI.title_level
-          UI.title_level = 0
-          begin
-            if name =~ /^master(-\d+)?$/
-              Command::Setup.parse([]).run
-            else
-              Command::Repo::Add.parse([name, url]).run
-            end
-          rescue Informative => e
-            message = "Unable to add a source with url `#{url}` " \
-              "named `#{name}`.\n"
-            message << "(#{e})\n" if Config.instance.verbose?
-            message << 'You can try adding it manually in ' \
-              "`#{Config.instance.repos_dir}` or via `pod repo add`."
-            raise Informative, message
-          ensure
-            UI.title_level = previous_title_level
+        source_with_url(url) || create_source_with_url(url)
+      end
+
+      # Adds the source whose {Source#url} is equal to `url`,
+      # in a manner similarly to `pod repo add` if it is not found.
+      #
+      # @raise  If no source with the given `url` could be created,
+      #
+      # @return [Source] The source whose {Source#url} is equal to `url`,
+      #
+      # @param  [String] url
+      #         The URL of the source.
+      #
+      def create_source_with_url(url)
+        name = name_for_url(url)
+        is_cdn = cdn_url?(url)
+
+        # Hack to ensure that `repo add` output is shown.
+        previous_title_level = UI.title_level
+        UI.title_level = 0
+
+        begin
+          if is_cdn
+            Command::Repo::AddCDN.parse([name, url]).run
+          else
+            Command::Repo::Add.parse([name, url]).run
           end
-          source = source_with_url(url)
+        rescue Informative => e
+          message = "Unable to add a source with url `#{url}` " \
+            "named `#{name}`.\n"
+          message << "(#{e})\n" if Config.instance.verbose?
+          message << 'You can try adding it manually in ' \
+            "`#{Config.instance.repos_dir}` or via `pod repo add`."
+          raise Informative, message
+        ensure
+          UI.title_level = previous_title_level
         end
+        source = source_with_url(url)
 
         raise "Unable to create a source with URL #{url}" unless source
 
         source
+      end
+
+      # Determines whether `url` is a CocoaPods CDN URL.
+      #
+      # @return [Boolean] whether `url` is a CocoaPods CDN URL,
+      #
+      # @param  [String] url
+      #         The URL of the source.
+      #
+      def cdn_url?(url)
+        if url =~ %r{^https?:\/\/}
+          require 'typhoeus'
+
+          response = Typhoeus.get(url + '/CocoaPods-version.yml', :netrc_file => Netrc.default_path, :netrc => :optional)
+          response.code == 200 && begin
+            response_hash = YAML.load(response.body) # rubocop:disable Security/YAMLLoad
+            response_hash.is_a?(Hash) && !Source::Metadata.new(response_hash).latest_cocoapods_version.nil?
+          end
+        end
+      rescue => e
+        raise Informative, "Couldn't determine repo type for URL: `#{url}`: #{e}"
       end
 
       # Returns the source whose {Source#name} or {Source#url} is equal to the
@@ -77,29 +116,54 @@ module Pod
       #
       def update(source_name = nil, show_output = false)
         if source_name
-          sources = [git_source_named(source_name)]
+          sources = [updateable_source_named(source_name)]
         else
-          sources =  git_sources
+          sources = updateable_sources
         end
 
         changed_spec_paths = {}
-        sources.each do |source|
-          UI.section "Updating spec repo `#{source.name}`" do
-            changed_source_paths = source.update(show_output)
-            changed_spec_paths[source] = changed_source_paths if changed_source_paths.count > 0
-            source.verify_compatibility!
+
+        # Do not perform an update if the repos dir has not been setup yet.
+        return unless repos_dir.exist?
+
+        # Create the Spec_Lock file if needed and lock it so that concurrent
+        # repo updates do not cause each other to fail
+        File.open("#{repos_dir}/Spec_Lock", File::CREAT) do |f|
+          f.flock(File::LOCK_EX)
+          sources.each do |source|
+            UI.section "Updating spec repo `#{source.name}`" do
+              changed_source_paths = source.update(show_output)
+              changed_spec_paths[source] = changed_source_paths if changed_source_paths.count > 0
+              source.verify_compatibility!
+            end
           end
         end
         # Perform search index update operation in background.
         update_search_index_if_needed_in_background(changed_spec_paths)
+      end
+
+      # Adds the provided source to the list of sources
+      #
+      # @param [Source] source the source to add
+      #
+      def add_source(source)
+        all << source unless all.any? { |s| s.url == source || s.name == source.name }
       end
     end
 
     extend Executable
     executable :git
 
-    def git(args, include_error: false)
-      Executable.capture_command('git', args, :capture => include_error ? :merge : :out).first.strip
+    def repo_git(args, include_error: false)
+      Executable.capture_command('git', ['-C', repo] + args,
+                                 :capture => include_error ? :merge : :out,
+                                 :env => {
+                                   'GIT_CONFIG' => nil,
+                                   'GIT_DIR' => nil,
+                                   'GIT_WORK_TREE' => nil,
+                                 }
+                                ).
+        first.strip
     end
 
     def update_git_repo(show_output = false)
@@ -118,16 +182,7 @@ module Pod
     end
   end
 
-  class MasterSource
-    def update_git_repo(show_output = false)
-      if repo.join('.git', 'shallow').file?
-        UI.info "Performing a deep fetch of the `#{name}` specs repo to improve future performance" do
-          git!(%W(-C #{repo} fetch --unshallow))
-        end
-      end
-      super
-    end
-
+  class TrunkSource
     def verify_compatibility!
       super
       latest_cocoapods_version = metadata.latest_cocoapods_version && Gem::Version.create(metadata.latest_cocoapods_version)

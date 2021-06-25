@@ -26,10 +26,6 @@ module Pod
         @sandbox.manifest.should.nil?
       end
 
-      it 'returns the project' do
-        @sandbox.project.should.nil?
-      end
-
       it 'returns the public headers store' do
         @sandbox.public_headers.root.should ==
           temporary_directory + 'Sandbox/Headers/Public'
@@ -41,8 +37,11 @@ module Pod
         @sandbox.specifications_root.mkpath
         @sandbox.store_podspec('BananaLib', fixture('banana-lib/BananaLib.podspec'))
         specification_path = @sandbox.specification_path('BananaLib')
+        pod_project_path = @sandbox.pod_target_project_path('BananaLib')
+        pod_project_path.mkpath
         @sandbox.clean_pod('BananaLib')
         pod_root.should.not.exist
+        pod_project_path.should.not.exist
         specification_path.should.not.exist
       end
 
@@ -174,6 +173,13 @@ module Pod
         source = { :git => 'example.com', :commit => 'SHA' }
         @sandbox.store_checkout_source('BananaLib', source)
         @sandbox.checkout_sources.should == { 'BananaLib' => source }
+      end
+
+      it 'removes local podspec of a Pod' do
+        local_podspec_path = 'Some Path/Local Pods/BananaLib.podspec'
+        @sandbox.stubs(:specification_path).returns(local_podspec_path)
+        FileUtils.expects(:rm).with(local_podspec_path).once
+        @sandbox.remove_local_podspec('BananaLib')
       end
 
       #--------------------------------------#

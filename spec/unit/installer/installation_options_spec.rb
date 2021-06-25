@@ -10,6 +10,7 @@ module Pod
         'integrate_targets' => true,
         'lock_pod_sources' => true,
         'share_schemes_for_development_pods' => false,
+        'preserve_pod_file_structure' => false,
       }.each do |option, default|
         it "includes `#{option}` defaulting to `#{default}`" do
           Installer::InstallationOptions.defaults.fetch(option).should == default
@@ -64,7 +65,13 @@ module Pod
           'integrate_targets' => true,
           'lock_pod_sources' => true,
           'warn_for_multiple_pod_sources' => true,
+          'warn_for_unused_master_specs_repo' => true,
           'share_schemes_for_development_pods' => false,
+          'disable_input_output_paths' => false,
+          'preserve_pod_file_structure' => false,
+          'generate_multiple_pod_projects' => false,
+          'incremental_installation' => false,
+          'skip_pods_project_generation' => false,
         }
       end
 

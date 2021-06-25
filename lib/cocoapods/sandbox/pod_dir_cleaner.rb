@@ -48,14 +48,13 @@ module Pod
       # @return [Array<Strings>] The paths that can be deleted.
       #
       def clean_paths
-        cached_used = used_files
+        cached_used = used_files.map(&:downcase)
         glob_options = File::FNM_DOTMATCH | File::FNM_CASEFOLD
         files = Pathname.glob(root + '**/*', glob_options).map(&:to_s)
-
+        cached_used_set = cached_used.to_set
         files.reject do |candidate|
           candidate = candidate.downcase
-          candidate.end_with?('.', '..') || cached_used.any? do |path|
-            path = path.downcase
+          candidate.end_with?('.', '..') || cached_used_set.include?(candidate) || cached_used.any? do |path|
             path.include?(candidate) || candidate.include?(path)
           end
         end
@@ -65,20 +64,7 @@ module Pod
       #         specifications (according to their platform) of this Pod.
       #
       def used_files
-        files = [
-          file_accessors.map(&:vendored_frameworks),
-          file_accessors.map(&:vendored_libraries),
-          file_accessors.map(&:resource_bundle_files),
-          file_accessors.map(&:license),
-          file_accessors.map(&:prefix_header),
-          file_accessors.map(&:preserve_paths),
-          file_accessors.map(&:readme),
-          file_accessors.map(&:resources),
-          file_accessors.map(&:source_files),
-          file_accessors.map(&:module_map),
-        ]
-
-        files.flatten.compact.map(&:to_s).uniq
+        FileAccessor.all_files(file_accessors)
       end
     end
   end

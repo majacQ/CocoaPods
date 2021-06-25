@@ -2,6 +2,8 @@ require File.expand_path('../../../spec_helper', __FILE__)
 
 module Pod
   describe UserInterface::ErrorReport do
+    extend SpecHelper::TemporaryRepos
+
     def remove_color(string)
       string.gsub(/\e\[(\d+)m/, '')
     end
@@ -11,9 +13,23 @@ module Pod
         @exception = Informative.exception('at - (~/code.rb):')
         @exception.stubs(:backtrace).returns(['Line 1', 'Line 2'])
         @report = UserInterface::ErrorReport
+        set_up_test_repo
+        config.repos_dir = SpecHelper.tmp_repos_path
+        Pod::TrunkSource.any_instance.stubs(:refresh_metadata)
+        FileUtils.mkdir_p(SpecHelper.tmp_repos_path.join('trunk'))
+        FileUtils.cp(fixture('spec-repos/trunk').join('.url'), SpecHelper.tmp_repos_path.join('trunk/.url'))
       end
 
       it 'returns a well-structured report' do
+        master = stub('master',
+                      :url => 'https://github.com/CocoaPods/Specs.git', :repo => SpecHelper.tmp_repos_path.join('master'),
+                      :git? => true)
+        sources = [
+          master,
+          Pod::TrunkSource.new(SpecHelper.tmp_repos_path.join('trunk')),
+        ]
+        @report.stubs(:git_hash).returns('ABCD')
+        config.sources_manager.stubs(:all).returns(sources)
         expected = <<-EOS
 
 ――― MARKDOWN TEMPLATE ―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
@@ -43,8 +59,8 @@ module Pod
        Xcode : :xcode_information
          Git : :git_information
 Ruby lib dir : #{RbConfig::CONFIG['libdir']}
-Repositories : repo_1
-               repo_2
+Repositories : master - git - https://github.com/CocoaPods/Specs.git @ ABCD
+               trunk - CDN - #{Pod::TrunkSource::TRUNK_REPO_URL}
 ```
 
 ### Plugins
@@ -96,7 +112,6 @@ EOS
         @report.stubs(:host_information).returns(':host_information')
         @report.stubs(:xcode_information).returns(':xcode_information')
         @report.stubs(:git_information).returns(':git_information')
-        @report.stubs(:repo_information).returns(%w(repo_1 repo_2))
         @report.stubs(:installed_plugins).returns('cocoapods' => Pod::VERSION,
                                                   'cocoapods-core' => Pod::VERSION,
                                                   'cocoapods-plugins' => '1.2.3')
@@ -139,6 +154,13 @@ and 30 more at:
 https://github.com/cocoapods/cocoapods/search?q=Testing&type=Issues&utf8=✓
 EOS
         UI.output.should == result
+      end
+
+      it 'doesn\'t crash on non UTF-8 error message' do
+        should.not.raise(Encoding::CompatibilityError) do
+          @exception.stubs(:message).returns('”ASCII-8BIT”'.force_encoding('ASCII-8BIT'))
+          @report.report(@exception)
+        end
       end
     end
   end

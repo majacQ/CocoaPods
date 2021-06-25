@@ -17,6 +17,13 @@ module Pod
       end
     end
 
+    it 'adds a spec-repo with a name that starts with a -' do
+      run_command('repo', 'add', '-tmp', test_repo_path)
+      Dir.chdir(config.repos_dir + '-tmp') do
+        `git config --get remote.origin.url`.chomp.should == test_repo_path.to_s
+      end
+    end
+
     it 'adds a spec-repo with a specified branch' do
       repo1 = repo_make('repo1')
       Dir.chdir(repo1) do
@@ -37,14 +44,10 @@ module Pod
       e.message.should.match /Could not create '#{tmp_repos_path}', the CocoaPods repo cache directory./
     end
 
-    it 'raises an informative error when attempting to add the master repo' do
-      master = command('repo', 'add', 'master', 'https://github.com/foo/bar.git')
+    it 'raises an informative error when attempting to add `trunk`' do
+      master = command('repo', 'add', 'trunk', 'https://github.com/foo/bar.git')
       should.raise(Informative) { master.validate! }.message.should.
-        include('To setup the master specs repo, please run `pod setup`')
-
-      master = command('repo', 'add', 'foo-bar', 'https://github.com/CocoaPods/Specs.git')
-      should.raise(Informative) { master.validate! }.message.should.
-        include('To setup the master specs repo, please run `pod setup`')
+        include("Repo name `trunk` is reserved for CocoaPods' main spec repo accessed via CDN.")
     end
   end
 end

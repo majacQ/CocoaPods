@@ -7,13 +7,13 @@ module Pod
         class AppHostInstaller
           include TargetInstallerHelper
 
-          # @return [Sandbox] sandbox
+          # @return [Sandbox]
           #         The sandbox used for this installation.
           #
           attr_reader :sandbox
 
           # @return [Pod::Project]
-          #         The `Pods/Pods.xcodeproj` to install the app host into.
+          #         The project to install the app host into.
           #
           attr_reader :project
 
@@ -21,47 +21,87 @@ module Pod
           #
           attr_reader :platform
 
-          # @return [Symbol] the test type this app host is going to be used for.
+          # @return [String] the name of the sub group.
           #
-          attr_reader :test_type
+          attr_reader :subgroup_name
+
+          # @return [String] the name of the group the app host installer will be installing within.
+          #
+          attr_reader :group_name
+
+          # @return [String] the name of the app target label that will be used.
+          #
+          attr_reader :app_target_label
+
+          # @return [Boolean] whether the app host installer should add main.m
+          #
+          attr_reader :add_main
+
+          # @return [Boolean] whether the app host installer should add a launch screen storyboard
+          #
+          attr_reader :add_launchscreen_storyboard
+
+          # @return [Hash] Info.plist entries for the app host
+          #
+          attr_reader :info_plist_entries
 
           # Initialize a new instance
           #
           # @param [Sandbox] sandbox @see #sandbox
           # @param [Pod::Project] project @see #project
           # @param [Platform] platform @see #platform
-          # @param [Symbol] test_type @see #test_type
+          # @param [String] subgroup_name @see #subgroup_name
+          # @param [String] group_name @see #group_name
+          # @param [String] app_target_label see #app_target_label
+          # @param [Boolean] add_main see #add_main
+          # @param [Hash] info_plist_entries see #info_plist_entries
           #
-          def initialize(sandbox, project, platform, test_type)
+          def initialize(sandbox, project, platform, subgroup_name, group_name, app_target_label, add_main: true, add_launchscreen_storyboard: platform == :ios, info_plist_entries: {})
             @sandbox = sandbox
             @project = project
             @platform = platform
-            @test_type = test_type
+            @subgroup_name = subgroup_name
+            @group_name = group_name
+            @app_target_label = app_target_label
+            @add_main = add_main
+            @add_launchscreen_storyboard = add_launchscreen_storyboard
+            @info_plist_entries = info_plist_entries
+            target_group = project.pod_group(group_name)
+            @group = target_group[subgroup_name] || target_group.new_group(subgroup_name)
           end
 
           # @return [PBXNativeTarget] the app host native target that was installed.
           #
           def install!
-            name = app_host_label
             platform_name = platform.name
             app_host_target = Pod::Generator::AppTargetHelper.add_app_target(project, platform_name, deployment_target,
-                                                                             name)
+                                                                             app_target_label)
             app_host_target.build_configurations.each do |configuration|
-              configuration.build_settings['PRODUCT_NAME'] = name
+              configuration.build_settings['PRODUCT_NAME'] = app_target_label
               configuration.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'org.cocoapods.${PRODUCT_NAME:rfc1034identifier}'
-              configuration.build_settings['CODE_SIGN_IDENTITY'] = '' if platform == :osx
+              if platform == :osx
+                configuration.build_settings['CODE_SIGN_IDENTITY'] = ''
+              elsif platform == :ios
+                configuration.build_settings['CODE_SIGN_IDENTITY'] = 'iPhone Developer'
+              end
               configuration.build_settings['CURRENT_PROJECT_VERSION'] = '1'
             end
-            Pod::Generator::AppTargetHelper.add_app_host_main_file(project, app_host_target, platform_name, name)
-            Pod::Generator::AppTargetHelper.add_launchscreen_storyboard(project, app_host_target, name) if platform == :ios
-            additional_entries = platform == :ios ? ADDITIONAL_IOS_INFO_PLIST_ENTRIES : {}
+
+            Pod::Generator::AppTargetHelper.add_app_host_main_file(project, app_host_target, platform_name, @group, app_target_label) if add_main
+            Pod::Generator::AppTargetHelper.add_launchscreen_storyboard(project, app_host_target, @group, deployment_target, app_target_label) if add_launchscreen_storyboard
             create_info_plist_file_with_sandbox(sandbox, app_host_info_plist_path, app_host_target, '1.0.0', platform,
-                                                :appl, additional_entries)
-            project[name].new_file(app_host_info_plist_path)
+                                                :appl, :additional_entries => additional_info_plist_entries)
+            @group.new_file(app_host_info_plist_path)
             app_host_target
           end
 
           private
+
+          ADDITIONAL_INFO_PLIST_ENTRIES = {
+            'NSAppTransportSecurity' => {
+              'NSAllowsArbitraryLoads' => true,
+            },
+          }.freeze
 
           ADDITIONAL_IOS_INFO_PLIST_ENTRIES = {
             'UILaunchStoryboardName' => 'LaunchScreen',
@@ -78,16 +118,20 @@ module Pod
             ),
           }.freeze
 
+          # @return [Hash] the additional Info.plist entries to be included
+          #
+          def additional_info_plist_entries
+            result = {}
+            result.merge!(ADDITIONAL_INFO_PLIST_ENTRIES)
+            result.merge!(ADDITIONAL_IOS_INFO_PLIST_ENTRIES) if platform == :ios
+            result.merge!(info_plist_entries) if info_plist_entries
+            result
+          end
+
           # @return [Pathname] The absolute path of the Info.plist to use for an app host.
           #
           def app_host_info_plist_path
-            project.path.dirname.+("#{app_host_label}/#{app_host_label}-Info.plist")
-          end
-
-          # @return [String] The label of the app host label to use given the platform and test type.
-          #
-          def app_host_label
-            "AppHost-#{Platform.string_name(platform.symbolic_name)}-#{test_type.capitalize}-Tests"
+            project.path.dirname.+(subgroup_name).+("#{app_target_label}-Info.plist")
           end
 
           # @return [String] The deployment target.

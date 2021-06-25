@@ -31,7 +31,7 @@ module Pod
 ### Error
 
 ```
-#{exception.class} - #{exception.message}
+#{exception.class} - #{exception.message.force_encoding('UTF-8')}
 #{exception.backtrace.join("\n") if exception.backtrace}
 ```
 
@@ -117,6 +117,9 @@ EOS
           inspector = GhInspector::Inspector.new 'cocoapods', 'cocoapods'
           message_delegate = UserInterface::InspectorReporter.new
           inspector.search_exception exception, message_delegate
+        rescue => e
+          warn "Searching for inspections failed: #{e}"
+          nil
         end
 
         private
@@ -168,18 +171,32 @@ EOS
 
         def repo_information
           Config.instance.sources_manager.all.map do |source|
-            next unless source.type == 'file system'
             repo = source.repo
-            Dir.chdir(repo) do
-              url = `git config --get remote.origin.url 2>&1`.strip
-              sha = `git rev-parse HEAD 2>&1`.strip
-              "#{repo.basename} - #{url} @ #{sha}"
+            if source.is_a?(Pod::CDNSource)
+              "#{repo.basename} - CDN - #{source.url}"
+            elsif source.git?
+              sha = git_hash(source)
+              "#{repo.basename} - git - #{source.url} @ #{sha}"
+            else
+              "#{repo.basename} - #{source.type}"
             end
           end
         end
 
         def original_command
           "#{$PROGRAM_NAME} #{ARGV.join(' ')}"
+        end
+
+        private
+
+        # @param [Source] source
+        #        a git source
+        #
+        # @return [String] the current git SHA
+        def git_hash(source)
+          Dir.chdir(source.repo) do
+            `git rev-parse HEAD 2>&1`
+          end
         end
       end
     end

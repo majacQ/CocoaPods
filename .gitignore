@@ -22,6 +22,7 @@ spec/fixtures/chameleon
 spec/fixtures/integration/Headers/
 spec/fixtures/snake
 spec/fixtures/vcr
+spec/fixtures/spec-repos/Spec_Lock
 tmp
 
 # Examples
@@ -43,3 +44,7 @@ coverage/
 
 # Bundler files
 /.bundle
+
+# trunk source
+spec/fixtures/spec-repos/trunk/**/*.etag
+spec/fixtures/spec-repos/trunk/*.yml

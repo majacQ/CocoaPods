@@ -63,7 +63,7 @@ module Pod
 
       it 'allows to specify the cache dir with a config file' do
         ENV['CP_HOME_DIR'] = SpecHelper.temporary_directory.to_s
-        config = { :cache_root => 'config_cache_dir' }
+        config = { 'cache_root' => 'config_cache_dir' }
         File.write(SpecHelper.temporary_directory + 'config.yaml', config.to_yaml)
         @config = Config.new
         @config.cache_root.should == Pathname.new('config_cache_dir').expand_path
@@ -73,7 +73,7 @@ module Pod
 
       it 'allows cache dir environment variable to override the config file' do
         ENV['CP_HOME_DIR'] = SpecHelper.temporary_directory.to_s
-        config = { :cache_root => 'config_cache_dir' }
+        config = { 'cache_root' => 'config_cache_dir' }
         File.write(SpecHelper.temporary_directory + 'config.yaml', config.to_yaml)
         ENV['CP_CACHE_DIR'] = (SpecHelper.temporary_directory + 'custom_cache_dir').to_s
         @config = Config.new
@@ -136,6 +136,16 @@ module Pod
         end
       end
 
+      it 'should not return the working directory as the installation root if found Podfile is a directory' do
+        Dir.chdir(temporary_directory) do
+          path = temporary_directory + 'Podfile'
+          path.mkpath
+          Dir.chdir(path) do
+            @config.installation_root.should == path
+          end
+        end
+      end
+
       it 'returns the parent directory which contains the Podfile if it can be found' do
         Dir.chdir(temporary_directory) do
           File.open('Podfile', 'w') {}
@@ -183,6 +193,11 @@ module Pod
       it 'can detect files named `CocoaPods.podfile`' do
         (temporary_directory + 'CocoaPods.podfile').open('w') { |f| f << '# Yo' }
         @config.podfile_path.should == temporary_directory + 'CocoaPods.podfile'
+      end
+
+      it 'can detect files named `Podfile.rb`' do
+        (temporary_directory + 'Podfile.rb').open('w') { |f| f << '# Yo' }
+        @config.podfile_path.should == temporary_directory + 'Podfile.rb'
       end
 
       it 'returns the path to the Pods directory that holds the dependencies' do
@@ -271,6 +286,26 @@ module Pod
         it 'returns nils if the Podfile is not available' do
           path = @config.send(:podfile_path_in_dir, temporary_directory)
           path.should.nil?
+        end
+      end
+
+      describe '#exclude_from_backup' do
+        # Conditionally skip the test if `tmutil` is not available.
+        has_tmutil = system('tmutil', 'version', :out => File::NULL)
+        cit = has_tmutil ? method(:it) : method(:xit)
+        cit.call 'excludes the dir from Time Machine backups' do
+          dir = temporary_directory + 'no_backup'
+          FileUtils.mkdir(dir)
+          @config.send(:exclude_from_backup, dir)
+          `tmutil isexcluded #{dir}`.chomp.should.start_with?('[Excluded]')
+        end
+
+        it 'does not raise if the dir does not exist' do
+          dir = temporary_directory + 'no_backup'
+          FileUtils.remove_dir(dir, true)
+          should.not.raise do
+            @config.send(:exclude_from_backup, dir)
+          end
         end
       end
 

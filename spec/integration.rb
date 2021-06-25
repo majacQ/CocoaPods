@@ -51,6 +51,7 @@ require 'colored2'
 
 require 'cocoapods-core/lockfile'
 require 'cocoapods-core/yaml_helper'
+require 'cocoapods-downloader'
 require 'fileutils'
 require 'integration/file_tree'
 require 'integration/xcodeproj_project_yaml'
@@ -124,7 +125,7 @@ describe_cli 'pod' do
   has_mercurial = $?.success?
 
   subject do |s|
-    s.executable = "ruby #{ROOT + 'bin/pod'}"
+    s.executable = "ruby -W0 #{ROOT + 'bin/pod'}"
     s.environment_vars = {
       'CLAIDE_DISABLE_AUTO_WRAP'            => 'TRUE',
       'COCOAPODS_DISABLE_STATS'             => 'TRUE',
@@ -146,6 +147,8 @@ describe_cli 'pod' do
     s.replace_pattern /#{Dir.tmpdir}\/[\w-]+/io, 'TMPDIR'
     s.replace_pattern /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [-+]\d{4}/, '<#DATE#>'
     s.replace_pattern /\(Took \d+.\d+ seconds\)/, '(Took <#DURATION#> seconds)'
+    s.replace_pattern /\b#{Regexp.escape(Pod::VERSION)}\b/, '<#Pod::VERSION#>'
+    s.replace_pattern /\b#{Regexp.escape(Pod::Downloader::VERSION)}\b/, '<#Pod::Downloader::VERSION#>'
 
     # This was changed in a very recent git version
     s.replace_pattern /git checkout -b <new-branch-name>/, 'git checkout -b new_branch_name'
@@ -167,6 +170,13 @@ describe_cli 'pod' do
       ^\s* Dload \s* Upload .* \n
       (^\s* [[:cntrl:]] .* \n)+
     }iox, "\\1\n"
+
+    # ignore lines in the vein of `CDN: trunk Relative path: all_pods_versions_1_3_f.txt exists!`
+    # they are somewhat non-deteministic and non-essential to testing integration
+    s.replace_pattern /.*CDN:.*\n/, ''
+
+    # replace all git downloader output with just the command
+    s.replace_pattern %r{ > Git download\n(     \$ GIT_BIN [^\n]+\n)(     [^\n]*\n|\n)+}m, " > Git download\n\\1\n"
   end
 
   describe 'Pod install' do
@@ -289,8 +299,18 @@ describe_cli 'pod' do
                             'install --no-repo-update'
     end
 
+    describe 'Integrates a Pod with a header mappings directory on macOS' do
+      behaves_like cli_spec 'install_header_mappings_dir_macos',
+                            'install --no-repo-update'
+    end
+
     describe 'Integrates a Pod using non Objective-C source files' do
       behaves_like cli_spec 'install_non_objective_c_files',
+                            'install --no-repo-update'
+    end
+
+    describe 'Integrates a project using generate_multiple_pod_projects option' do
+      behaves_like cli_spec 'install_multi_pods_project',
                             'install --no-repo-update'
     end
 
@@ -299,6 +319,21 @@ describe_cli 'pod' do
       # otherwise curl output is included in execution output.
       behaves_like cli_spec 'install_vendored_dynamic_framework',
                             'install --no-repo-update --no-verbose'
+    end
+
+    describe 'Integrates a Pod using a vendored static xcframework' do
+      behaves_like cli_spec 'install_vendored_static_xcframework',
+                            'install --no-repo-update'
+    end
+
+    describe 'Integrates a Pod using a vendored static library xcframework' do
+      behaves_like cli_spec 'install_vendored_static_library_xcframework',
+                            'install --no-repo-update'
+    end
+
+    describe 'Integrates a Pod using a vendored xcframework' do
+      behaves_like cli_spec 'install_vendored_xcframework',
+                            'install --no-repo-update'
     end
 
     # @todo add tests for all the hooks API
@@ -340,6 +375,15 @@ describe_cli 'pod' do
     describe 'Updates a selected Pod in an existing installation' do
       behaves_like cli_spec 'update_selected',
                             'update Reachability --no-repo-update'
+    end
+  end
+
+  #--------------------------------------#
+
+  describe 'Pod outdated' do
+    describe 'Prints outdated specs' do
+      behaves_like cli_spec 'outdated_multiple_specs',
+                            'outdated --no-repo-update'
     end
   end
 

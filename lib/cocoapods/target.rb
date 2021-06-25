@@ -16,12 +16,6 @@ module Pod
     #
     attr_reader :sandbox
 
-    # @return [Boolean] Whether the target needs to be implemented as a framework.
-    #         Computed by analyzer.
-    #
-    attr_reader :host_requires_frameworks
-    alias_method :host_requires_frameworks?, :host_requires_frameworks
-
     # @return [Hash{String=>Symbol}] A hash representing the user build
     #         configurations where each key corresponds to the name of a
     #         configuration and its value to its type (`:debug` or `:release`).
@@ -40,21 +34,37 @@ module Pod
     #
     attr_reader :build_settings
 
+    # @return [BuildType] the build type for this target.
+    #
+    attr_reader :build_type
+    private :build_type
+
+    # @return [Boolean] whether the target can be linked to app extensions only.
+    #
+    attr_reader :application_extension_api_only
+
+    # @return [Boolean] whether the target must be compiled with Swift's library
+    # evolution support, necessary for XCFrameworks.
+    #
+    attr_reader :build_library_for_distribution
+
     # Initialize a new target
     #
     # @param [Sandbox] sandbox @see #sandbox
-    # @param [Boolean] host_requires_frameworks @see #host_requires_frameworks
+    # @param [BuildType] build_type @see #build_type
     # @param [Hash{String=>Symbol}] user_build_configurations @see #user_build_configurations
     # @param [Array<String>] archs @see #archs
     # @param [Platform] platform @see #platform
     #
-    def initialize(sandbox, host_requires_frameworks, user_build_configurations, archs, platform)
+    def initialize(sandbox, build_type, user_build_configurations, archs, platform)
       @sandbox = sandbox
-      @host_requires_frameworks = host_requires_frameworks
       @user_build_configurations = user_build_configurations
       @archs = archs
       @platform = platform
+      @build_type = build_type
 
+      @application_extension_api_only = false
+      @build_library_for_distribution = false
       @build_settings = create_build_settings
     end
 
@@ -84,10 +94,60 @@ module Pod
       false
     end
 
+    # @return [Boolean] whether the target is built dynamically
+    #
+    def build_as_dynamic?
+      build_type.dynamic?
+    end
+
+    # @return [Boolean] whether the target is built as a dynamic framework
+    #
+    def build_as_dynamic_framework?
+      build_type.dynamic_framework?
+    end
+
+    # @return [Boolean] whether the target is built as a dynamic library
+    #
+    def build_as_dynamic_library?
+      build_type.dynamic_library?
+    end
+
+    # @return [Boolean] whether the target is built as a framework
+    #
+    def build_as_framework?
+      build_type.framework?
+    end
+
+    # @return [Boolean] whether the target is built as a library
+    #
+    def build_as_library?
+      build_type.library?
+    end
+
+    # @return [Boolean] whether the target is built statically
+    #
+    def build_as_static?
+      build_type.static?
+    end
+
+    # @return [Boolean] whether the target is built as a static framework
+    #
+    def build_as_static_framework?
+      build_type.static_framework?
+    end
+
+    # @return [Boolean] whether the target is built as a static library
+    #
+    def build_as_static_library?
+      build_type.static_library?
+    end
+
+    # @deprecated Prefer {build_as_static_framework?}.
+    #
     # @return [Boolean] Whether the target should build a static framework.
     #
     def static_framework?
-      false
+      build_as_static_framework?
     end
 
     # @return [String] the name to use for the source code module constructed
@@ -101,7 +161,7 @@ module Pod
     # @return [String] the name of the product.
     #
     def product_name
-      if requires_frameworks?
+      if build_as_framework?
         framework_name
       else
         static_library_name
@@ -113,7 +173,7 @@ module Pod
     #         and #product_module_name or #label.
     #
     def product_basename
-      if requires_frameworks?
+      if build_as_framework?
         product_module_name
       else
         label
@@ -139,27 +199,29 @@ module Pod
     end
 
     # @return [Symbol] either :framework or :static_library, depends on
-    #         #requires_frameworks?.
+    #         #build_as_framework?.
     #
     def product_type
-      requires_frameworks? ? :framework : :static_library
+      build_as_framework? ? :framework : :static_library
     end
 
     # @return [String] A string suitable for debugging.
     #
     def inspect
-      "<#{self.class} name=#{name} >"
+      "#<#{self.class} name=#{name}>"
     end
 
     #-------------------------------------------------------------------------#
 
     # @!group Framework support
 
+    # @deprecated Prefer {build_as_framework?}.
+    #
     # @return [Boolean] whether the generated target needs to be implemented
     #         as a framework
     #
     def requires_frameworks?
-      host_requires_frameworks? || false
+      build_as_framework?
     end
 
     #-------------------------------------------------------------------------#
@@ -181,7 +243,7 @@ module Pod
     #
     def xcconfig_path(variant = nil)
       if variant
-        support_files_dir + "#{label}.#{variant.gsub(File::SEPARATOR, '-').downcase}.xcconfig"
+        support_files_dir + "#{label}.#{variant.to_s.gsub(File::SEPARATOR, '-').downcase}.xcconfig"
       else
         support_files_dir + "#{label}.xcconfig"
       end
@@ -230,10 +292,65 @@ module Pod
       support_files_dir + "#{label}-Info.plist"
     end
 
+    # @return [Hash] additional entries for the generated Info.plist
+    #
+    def info_plist_entries
+      {}
+    end
+
     # @return [Pathname] the path of the dummy source generated by CocoaPods
     #
     def dummy_source_path
       support_files_dir + "#{label}-dummy.m"
+    end
+
+    # Mark the target as extension-only.
+    # Translates to APPLICATION_EXTENSION_API_ONLY = YES in the build settings.
+    #
+    def mark_application_extension_api_only
+      @application_extension_api_only = true
+    end
+
+    # Compiles the target with Swift's library evolution support, necessary to
+    # build XCFrameworks.
+    # Translates to BUILD_LIBRARY_FOR_DISTRIBUTION = YES in the build settings.
+    #
+    def mark_build_library_for_distribution
+      @build_library_for_distribution = true
+    end
+
+    # @return [Pathname] The absolute path of the prepare artifacts script.
+    #
+    # @deprecated
+    #
+    # @todo Remove in 2.0
+    #
+    def prepare_artifacts_script_path
+      support_files_dir + "#{label}-artifacts.sh"
+    end
+
+    # Returns an extension in the target that corresponds to the
+    # resource's input extension.
+    #
+    # @param [String] input_extension
+    #        The input extension to map to.
+    #
+    # @return [String] The output extension.
+    #
+    def self.output_extension_for_resource(input_extension)
+      case input_extension
+      when '.storyboard'        then '.storyboardc'
+      when '.xib'               then '.nib'
+      when '.xcdatamodel'       then '.mom'
+      when '.xcdatamodeld'      then '.momd'
+      when '.xcmappingmodel'    then '.cdm'
+      when '.xcassets'          then '.car'
+      else                      input_extension
+      end
+    end
+
+    def self.resource_extension_compilable?(input_extension)
+      output_extension_for_resource(input_extension) != input_extension && input_extension != '.xcassets'
     end
 
     #-------------------------------------------------------------------------#

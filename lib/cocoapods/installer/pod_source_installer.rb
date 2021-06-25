@@ -14,6 +14,11 @@ module Pod
       #
       attr_reader :sandbox
 
+      # @return [Podfile] the podfile that should be integrated with the user
+      #         projects.
+      #
+      attr_reader :podfile
+
       # @return [Hash{Symbol=>Array}] The specifications that need to be
       #         installed grouped by platform.
       #
@@ -27,11 +32,13 @@ module Pod
       # Initialize a new instance
       #
       # @param [Sandbox] sandbox @see #sandbox
+      # @param [Podfile] podfile @see #podfile
       # @param [Hash{Symbol=>Array}] specs_by_platform @see #specs_by_platform
       # @param [Boolean] can_cache @see #can_cache
       #
-      def initialize(sandbox, specs_by_platform, can_cache: true)
+      def initialize(sandbox, podfile, specs_by_platform, can_cache: true)
         @sandbox = sandbox
+        @podfile = podfile
         @specs_by_platform = specs_by_platform
         @can_cache = can_cache
       end
@@ -61,9 +68,15 @@ module Pod
       def install!
         download_source unless predownloaded? || local?
         PodSourcePreparer.new(root_spec, root).prepare! if local?
+        sandbox.remove_local_podspec(name) unless predownloaded? || local? || external?
       end
 
       # Cleans the installations if appropriate.
+      #
+      # Cleaning the installation will remove any files that are not used during the build process, based on
+      # the podspec and platforms of the target that the pod is integrated into.
+      #
+      # @see {#clean_installation}
       #
       # @return [void]
       #
@@ -77,7 +90,8 @@ module Pod
       #
       def lock_files!(file_accessors)
         return if local?
-        FileUtils.chmod('u-w', source_files(file_accessors))
+        unlocked_files = source_files(file_accessors).reject { |f| (File.stat(f).mode & 0o200).zero? }
+        FileUtils.chmod('u-w', unlocked_files)
       end
 
       # Unlocks the source files if appropriate.
@@ -123,7 +137,7 @@ module Pod
                    return unless git_source =~ /^#{URI.regexp}$/
                    URI(git_source)
                  end
-        if UNENCRYPTED_PROTOCOLS.include?(source.scheme)
+        if UNENCRYPTED_PROTOCOLS.include?(source.scheme) && source.host != 'localhost'
           UI.warn "'#{root_spec.name}' uses the unencrypted '#{source.scheme}' protocol to transfer the Pod. " \
                 'Please be sure you\'re in a safe network with only trusted hosts. ' \
                 'Otherwise, please reach out to the library author to notify them of this security issue.'
@@ -137,6 +151,10 @@ module Pod
         )
       end
 
+      #-----------------------------------------------------------------------#
+
+      private
+
       # Removes all the files not needed for the installation according to the
       # specs by platform.
       #
@@ -146,10 +164,6 @@ module Pod
         cleaner = Sandbox::PodDirCleaner.new(root, specs_by_platform)
         cleaner.clean!
       end
-
-      #-----------------------------------------------------------------------#
-
-      private
 
       # @!group Convenience methods.
 
@@ -184,6 +198,14 @@ module Pod
       #
       def local?
         sandbox.local?(root_spec.name)
+      end
+
+      # @return [Boolean] whether the pod uses an external source (e.g. :podspec) in the
+      #         resolution process to retrieve its podspec.
+      #
+      def external?
+        @dependencies ||= podfile.dependencies.select(&:external?).map(&:name)
+        @dependencies.include?(root_spec.name)
       end
 
       def released?

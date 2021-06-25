@@ -105,8 +105,8 @@ module Pod
 
       it 'includes the vendored framework headers if requested' do
         @accessor.public_headers(true).sort.should == [
-          @root + 'Bananalib.framework/Versions/A/Headers/Bananalib.h',
-          @root + 'Bananalib.framework/Versions/A/Headers/SubDir/SubBananalib.h',
+          @root + 'BananaFramework.framework/Versions/A/Headers/BananaFramework.h',
+          @root + 'BananaFramework.framework/Versions/A/Headers/SubDir/SubBananaFramework.h',
           @root + 'Classes/Banana.h',
           @root + 'framework/Source/MoreBanana.h',
         ]
@@ -141,23 +141,23 @@ module Pod
       end
 
       it 'returns the paths of the framework bundles' do
-        @accessor.vendored_frameworks.should.include?(@root + 'Bananalib.framework')
+        @accessor.vendored_frameworks.should.include?(@root + 'BananaFramework.framework')
       end
 
       it 'returns the paths of the framework headers' do
         @accessor.vendored_frameworks_headers.sort.should == [
-          @root + 'Bananalib.framework/Versions/A/Headers/Bananalib.h',
-          @root + 'Bananalib.framework/Versions/A/Headers/SubDir/SubBananalib.h',
+          @root + 'BananaFramework.framework/Versions/A/Headers/BananaFramework.h',
+          @root + 'BananaFramework.framework/Versions/A/Headers/SubDir/SubBananaFramework.h',
         ].sort
       end
 
       it 'handles when the framework headers directory does not exist' do
         Pathname.any_instance.stubs(:directory?).returns(false)
-        FileAccessor.vendored_frameworks_headers_dir(@root + 'Bananalib.framework').should == @root + 'Bananalib.framework/Headers'
+        FileAccessor.vendored_frameworks_headers_dir(@root + 'BananaFramework.framework').should == @root + 'BananaFramework.framework/Headers'
       end
 
       it 'returns the paths of the library files' do
-        @accessor.vendored_libraries.should.include?(@root + 'libBananalib.a')
+        @accessor.vendored_libraries.should.include?(@root + 'libBananaStaticLib.a')
       end
 
       it 'returns the resource bundles of the pod' do
@@ -335,27 +335,12 @@ module Pod
           file_patterns = ['Classes/*.{h,m,d}', 'Vendor', 'framework/Source/*.h']
           options = {
             :exclude_patterns => ['Classes/**/osx/**/*', 'Resources/**/osx/**/*'],
-            :dir_pattern => '*{.m,.mm,.i,.c,.cc,.cxx,.cpp,.c++,.swift,.h,.hh,.hpp,.ipp,.tpp,.hxx,.def,.inl}',
+            :dir_pattern => '*{.m,.mm,.i,.c,.cc,.cxx,.cpp,.c++,.swift,.h,.hh,.hpp,.ipp,.tpp,.hxx,.def,.inl,.inc}',
             :include_dirs => false,
           }
           @spec.exclude_files = options[:exclude_patterns]
           @accessor.expects(:expanded_paths).with(file_patterns, options)
           @accessor.send(:paths_for_attribute, :source_files)
-        end
-      end
-
-      describe '#dynamic_binary?' do
-        it 'not a dynamic binary if its not a file' do
-          binary = stub(:file? => false)
-          @accessor.send(:dynamic_binary?, binary).should.be.false
-        end
-
-        it 'uses the cache after the first time' do
-          binary = stub(:file? => true)
-          macho_file = stub(:dylib? => true)
-          MachO.stubs(:open).once.returns(macho_file)
-          @accessor.send(:dynamic_binary?, binary).should.be.true
-          @accessor.send(:dynamic_binary?, binary).should.be.true
         end
       end
     end

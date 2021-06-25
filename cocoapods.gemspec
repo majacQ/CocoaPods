@@ -30,24 +30,23 @@ Gem::Specification.new do |s|
   s.add_runtime_dependency 'cocoapods-core',        "= #{Pod::VERSION}"
 
   s.add_runtime_dependency 'claide',                '>= 1.0.2', '< 2.0'
-  s.add_runtime_dependency 'cocoapods-deintegrate', '>= 1.0.2', '< 2.0'
-  s.add_runtime_dependency 'cocoapods-downloader',  '>= 1.2.1', '< 2.0'
+  s.add_runtime_dependency 'cocoapods-deintegrate', '>= 1.0.3', '< 2.0'
+  s.add_runtime_dependency 'cocoapods-downloader',  '>= 1.4.0', '< 2.0'
   s.add_runtime_dependency 'cocoapods-plugins',     '>= 1.0.0', '< 2.0'
   s.add_runtime_dependency 'cocoapods-search',      '>= 1.0.0', '< 2.0'
-  s.add_runtime_dependency 'cocoapods-stats',       '>= 1.0.0', '< 2.0'
-  s.add_runtime_dependency 'cocoapods-trunk',       '>= 1.3.0', '< 2.0'
+  s.add_runtime_dependency 'cocoapods-trunk',       '>= 1.4.0', '< 2.0'
   s.add_runtime_dependency 'cocoapods-try',         '>= 1.1.0', '< 2.0'
   s.add_runtime_dependency 'molinillo',             '~> 0.6.6'
-  s.add_runtime_dependency 'xcodeproj',             '>= 1.5.8', '< 2.0'
+  s.add_runtime_dependency 'xcodeproj',             '>= 1.19.0', '< 2.0'
 
-  ## Version 5 needs Ruby 2.2, so we specify an upper bound to stay compatible with system ruby
-  s.add_runtime_dependency 'activesupport', '>= 4.0.2', '< 5'
   s.add_runtime_dependency 'colored2',       '~> 3.1'
   s.add_runtime_dependency 'escape',        '~> 0.0.4'
-  s.add_runtime_dependency 'fourflusher',   '~> 2.0.1'
+  s.add_runtime_dependency 'fourflusher',   '>= 2.3.0', '< 3.0'
   s.add_runtime_dependency 'gh_inspector',  '~> 1.0'
   s.add_runtime_dependency 'nap',           '~> 1.0'
-  s.add_runtime_dependency 'ruby-macho',    '~> 1.2'
+  s.add_runtime_dependency 'ruby-macho',    '~> 1.4'
+
+  s.add_runtime_dependency 'addressable', '~> 2.6'
 
   s.add_development_dependency 'bacon', '~> 1.1'
   s.add_development_dependency 'bundler', '~> 1.3'
@@ -56,6 +55,6 @@ Gem::Specification.new do |s|
   ## Make sure you can build the gem on older versions of RubyGems too:
   s.rubygems_version = "1.6.2"
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
-  s.required_ruby_version = '>= 2.0.0'
+  s.required_ruby_version = '>= 2.3.3'
   s.specification_version = 3 if s.respond_to? :specification_version
 end

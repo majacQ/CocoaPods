@@ -169,6 +169,20 @@ begin
 
         title 'Running Inch'
         Rake::Task['inch'].invoke
+
+        unless ENV['CI'].nil?
+          title 'Running Danger'
+          # The obfuscated token is hard-coded into the repo because GitHub's Actions have no option to make a secret
+          # available to PRs from forks. This token belongs to @CocoaPodsBarista and has no permissions except posting
+          # comments. The reason it is needed is to inform the PR author of things Danger has suggestions for.
+          ENV['DANGER_GITHUB_API_TOKEN'] = [:d, 2, :c, :e, 4,
+                                            6, 5, :d, 3, :c, :b, 3, 3,
+                                            :b, 6, 4, 4, 8, 2, 3, 2, :f,
+                                            1, 8, :d, 8, :a, 5, 1, 6,
+                                            5, 4, 4, 2, :c, :e, 3,
+                                            :b, 0, :b].map(&:to_s).join
+          Rake::Task['danger'].invoke
+        end
       end
     end
 
@@ -285,19 +299,26 @@ begin
           workspace.schemes.each do |scheme_name, project_path|
             next if scheme_name == 'Pods'
             next if project_path.end_with? 'Pods.xcodeproj'
-            puts "    Building scheme: #{scheme_name}"
+            build_action = scheme_name.start_with?('Test') ? 'test' : 'build'
+            puts "    #{build_action.capitalize}ing scheme: #{scheme_name}"
 
             project = Xcodeproj::Project.open(project_path)
             target = project.targets.first
+            scheme_target = project.targets.find { |t| t.name == scheme_name }
+            target = scheme_target unless scheme_target.nil?
 
-            platform = target.platform_name
-            case platform
+            xcodebuild_args = %W(
+              xcodebuild -workspace #{workspace_path} -scheme #{scheme_name} clean #{build_action}
+            )
+
+            case platform = target.platform_name
             when :osx
-              execute_command "xcodebuild -workspace '#{workspace_path}' -scheme '#{scheme_name}' clean build"
+              execute_command(*xcodebuild_args)
             when :ios
-              test_flag = (scheme_name.start_with? 'Test') ? 'test' : ''
-
-              execute_command "xcodebuild -workspace '#{workspace_path}' -scheme '#{scheme_name}' clean build #{test_flag} ONLY_ACTIVE_ARCH=NO -destination 'platform=iOS Simulator,name=iPhone 7'"
+              xcodebuild_args.concat ['ONLY_ACTIVE_ARCH=NO', '-destination', 'platform=iOS Simulator,name=iPhone 11 Pro']
+              execute_command(*xcodebuild_args)
+            when :watchos
+              xcodebuild_args.concat ['ONLY_ACTIVE_ARCH=NO', '-destination', 'platform=watchOS Simulator,name=Apple Watch Series 5 - 40mm']
             else
               raise "Unknown platform #{platform}"
             end
@@ -326,6 +347,15 @@ begin
   require 'inch_by_inch/rake_task'
   InchByInch::RakeTask.new
 
+  #-- Danger -----------------------------------------------------------------#
+
+  desc 'Run Danger to check PRs'
+  task :danger do
+    sh 'bundle exec danger' do |ok, _status|
+      raise 'Danger has found errors. Please refer to your PR for more information.' unless ok
+    end
+  end
+
 rescue LoadError, NameError => e
   $stderr.puts "\033[0;31m" \
     '[!] Some Rake tasks haven been disabled because the environment' \
@@ -341,11 +371,12 @@ end
 # Helpers
 #-----------------------------------------------------------------------------#
 
-def execute_command(command)
+def execute_command(*command)
   if ENV['VERBOSE']
-    sh(command)
+    sh(*command)
   else
-    output = `#{command} 2>&1`
+    args = command.size == 1 ? "#{command.first} 2>&1" : [*command, :err => %i(child out)]
+    output = IO.popen(args, &:read)
     raise output unless $?.success?
   end
 end

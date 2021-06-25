@@ -1,4 +1,6 @@
 require 'active_support/core_ext/string/inflections'
+require 'cocoapods/xcode/framework_paths'
+require 'cocoapods/target/build_settings'
 
 module Pod
   class Installer
@@ -30,33 +32,115 @@ module Pod
         # For messages extensions, this only applies if it's embedded in a messages
         # application.
         #
-        EMBED_FRAMEWORK_TARGET_TYPES = [:application, :unit_test_bundle, :ui_test_bundle, :watch2_extension, :messages_application].freeze
+        EMBED_FRAMEWORK_TARGET_TYPES = [:application, :application_on_demand_install_capable, :unit_test_bundle, :ui_test_bundle, :watch2_extension, :messages_application].freeze
 
         # @return [String] the name of the embed frameworks phase
         #
         EMBED_FRAMEWORK_PHASE_NAME = 'Embed Pods Frameworks'.freeze
 
+        # @return [String] the name of the copy xcframeworks phase
+        #
+        COPY_XCFRAMEWORKS_PHASE_NAME = 'Copy XCFrameworks'.freeze
+
         # @return [String] the name of the copy resources phase
         #
         COPY_PODS_RESOURCES_PHASE_NAME = 'Copy Pods Resources'.freeze
+
+        # @return [String] the name of the copy dSYM files phase
+        #
+        COPY_DSYM_FILES_PHASE_NAME = 'Copy dSYMs'.freeze
 
         # @return [Integer] the maximum number of input and output paths to use for a script phase
         #
         MAX_INPUT_OUTPUT_PATHS = 1000
 
+        # @return [Array<String>] names of script phases that existed in previous versions of CocoaPods
+        #
+        REMOVED_SCRIPT_PHASE_NAMES = [
+          'Prepare Artifacts'.freeze,
+        ].freeze
+
+        # @return [float] Returns Minimum Xcode Compatibility version for FileLists
+        #
+        MIN_FILE_LIST_COMPATIBILITY_VERSION = 9.3
+
+        # @return [String] Returns Minimum Xcode Object version for FileLists
+        #
+        MIN_FILE_LIST_OBJECT_VERSION = 50
+
         # @return [AggregateTarget] the target that should be integrated.
         #
         attr_reader :target
 
+        # @return [Boolean] whether to use input/output paths for build phase scripts
+        #
+        attr_reader :use_input_output_paths
+        alias use_input_output_paths? use_input_output_paths
+
         # Init a new TargetIntegrator
         #
         # @param  [AggregateTarget] target @see #target
+        # @param  [Boolean] use_input_output_paths @see #use_input_output_paths
         #
-        def initialize(target)
+        def initialize(target, use_input_output_paths: true)
           @target = target
+          @use_input_output_paths = use_input_output_paths
         end
 
+        # @private
+        #
+        XCFileListConfigKey = Struct.new(:file_list_path, :file_list_relative_path)
+
         class << self
+          # @param  [Xcodeproj::Project::Object::AbstractObject] object
+          #
+          # @return [Boolean] Whether input & output paths for the given object
+          #         should be stored in a file list file.
+          #
+          def input_output_paths_use_filelist?(object)
+            unless object.project.root_object.compatibility_version.nil?
+              version_match = object.project.root_object.compatibility_version.match(/Xcode ([0-9]*\.[0-9]*)/).to_a
+            end
+            if version_match&.at(1).nil?
+              object.project.object_version.to_i >= MIN_FILE_LIST_OBJECT_VERSION
+            else
+              Pod::Version.new(version_match[1]) >= Pod::Version.new(MIN_FILE_LIST_COMPATIBILITY_VERSION)
+            end
+          end
+
+          # Sets the input & output paths for the given script build phase.
+          #
+          # @param  [Xcodeproj::Project::Object::PBXShellScriptBuildPhase] phase
+          #         The phase to set input & output paths on.
+          #
+          # @param  [Hash] input_paths_by_config
+          #
+          # @return [Void]
+          def set_input_output_paths(phase, input_paths_by_config, output_paths_by_config)
+            if input_output_paths_use_filelist?(phase)
+              [input_paths_by_config, output_paths_by_config].each do |hash|
+                hash.each do |file_list, files|
+                  generator = Generator::FileList.new(files)
+                  Xcode::PodsProjectGenerator::TargetInstallerHelper.update_changed_file(generator, file_list.file_list_path)
+                end
+              end
+
+              phase.input_paths = nil
+              phase.output_paths = nil
+              phase.input_file_list_paths = input_paths_by_config.each_key.map(&:file_list_relative_path).uniq
+              phase.output_file_list_paths = output_paths_by_config.each_key.map(&:file_list_relative_path).uniq
+            else
+              input_paths = input_paths_by_config.values.flatten(1).uniq
+              output_paths = output_paths_by_config.values.flatten(1).uniq
+              TargetIntegrator.validate_input_output_path_limit(input_paths, output_paths)
+
+              phase.input_paths = input_paths
+              phase.output_paths = output_paths
+              phase.input_file_list_paths = nil
+              phase.output_file_list_paths = nil
+            end
+          end
+
           # Adds a shell script build phase responsible to copy (embed) the frameworks
           # generated by the TargetDefinition to the bundle of the product of the
           # targets.
@@ -67,30 +151,74 @@ module Pod
           # @param [String] script_path
           #        The script path to execute as part of this script phase.
           #
-          # @param [Array<String>] input_paths
+          # @param [Hash<Array, String>] input_paths_by_config
           #        The input paths (if any) to include for this script phase.
           #
-          # @param [Array<String>] output_paths
+          # @param [Hash<Array, String>] output_paths_by_config
           #        The output paths (if any) to include for this script phase.
           #
           # @return [void]
           #
-          def create_or_update_embed_frameworks_script_phase_to_target(native_target, script_path, input_paths = [], output_paths = [])
-            phase = TargetIntegrator.create_or_update_build_phase(native_target, BUILD_PHASE_PREFIX + EMBED_FRAMEWORK_PHASE_NAME)
+          def create_or_update_embed_frameworks_script_phase_to_target(native_target, script_path, input_paths_by_config = {}, output_paths_by_config = {})
+            phase = TargetIntegrator.create_or_update_shell_script_build_phase(native_target, BUILD_PHASE_PREFIX + EMBED_FRAMEWORK_PHASE_NAME)
             phase.shell_script = %("#{script_path}"\n)
-            phase.input_paths = input_paths
-            phase.output_paths = output_paths
+            TargetIntegrator.set_input_output_paths(phase, input_paths_by_config, output_paths_by_config)
           end
 
-          # Delete a 'Embed Pods Frameworks' Copy Files Build Phase if present
+          # Delete a 'Embed Pods Frameworks' Script Build Phase if present
           #
           # @param [PBXNativeTarget] native_target
           #        The native target to remove the script phase from.
           #
           def remove_embed_frameworks_script_phase_from_target(native_target)
-            embed_build_phase = native_target.shell_script_build_phases.find { |bp| bp.name && bp.name.end_with?(EMBED_FRAMEWORK_PHASE_NAME) }
-            return unless embed_build_phase.present?
-            native_target.build_phases.delete(embed_build_phase)
+            remove_script_phase_from_target(native_target, EMBED_FRAMEWORK_PHASE_NAME)
+          end
+
+          # Adds a shell script build phase responsible to copy the xcframework slice
+          # to the intermediate build directory.
+          #
+          # @param [PBXNativeTarget] native_target
+          #        The native target to add the script phase into.
+          #
+          # @param [String] script_path
+          #        The script path to execute as part of this script phase.
+          #
+          # @param [Hash<Array, String>] input_paths_by_config
+          #        The input paths (if any) to include for this script phase.
+          #
+          # @param [Hash<Array, String>] output_paths_by_config
+          #        The output paths (if any) to include for this script phase.
+          #
+          # @return [void]
+          #
+          def create_or_update_copy_xcframeworks_script_phase_to_target(native_target, script_path, input_paths_by_config = {}, output_paths_by_config = {})
+            phase = TargetIntegrator.create_or_update_shell_script_build_phase(native_target, BUILD_PHASE_PREFIX + COPY_XCFRAMEWORKS_PHASE_NAME)
+            phase.shell_script = %("#{script_path}"\n)
+            TargetIntegrator.set_input_output_paths(phase, input_paths_by_config, output_paths_by_config)
+            reorder_script_phase(native_target, phase, :before_compile)
+          end
+
+          # Delete a 'Copy XCFrameworks' Script Build Phase if present
+          #
+          # @param [PBXNativeTarget] native_target
+          #        The native target to remove the script phase from.
+          #
+          def remove_copy_xcframeworks_script_phase_from_target(native_target)
+            remove_script_phase_from_target(native_target, COPY_XCFRAMEWORKS_PHASE_NAME)
+          end
+
+          # Removes a script phase from a native target by name
+          #
+          # @param [PBXNativeTarget] native_target
+          #        The target from which the script phased should be removed
+          #
+          # @param [String] phase_name
+          #        The name of the script phase to remove
+          #
+          def remove_script_phase_from_target(native_target, phase_name)
+            build_phase = native_target.shell_script_build_phases.find { |bp| bp.name && bp.name.end_with?(phase_name) }
+            return unless build_phase.present?
+            native_target.build_phases.delete(build_phase)
           end
 
           # Adds a shell script build phase responsible to copy the resources
@@ -103,20 +231,19 @@ module Pod
           # @param [String] script_path
           #        The script path to execute as part of this script phase.
           #
-          # @param [Array<String>] input_paths
+          # @param [Hash<Array, String>] input_paths_by_config
           #        The input paths (if any) to include for this script phase.
           #
-          # @param [Array<String>] output_paths
+          # @param [Hash<Array, String>] output_paths_by_config
           #        The output paths (if any) to include for this script phase.
           #
           # @return [void]
           #
-          def create_or_update_copy_resources_script_phase_to_target(native_target, script_path, input_paths = [], output_paths = [])
+          def create_or_update_copy_resources_script_phase_to_target(native_target, script_path, input_paths_by_config = {}, output_paths_by_config = {})
             phase_name = COPY_PODS_RESOURCES_PHASE_NAME
-            phase = TargetIntegrator.create_or_update_build_phase(native_target, BUILD_PHASE_PREFIX + phase_name)
+            phase = TargetIntegrator.create_or_update_shell_script_build_phase(native_target, BUILD_PHASE_PREFIX + phase_name)
             phase.shell_script = %("#{script_path}"\n)
-            phase.input_paths = input_paths
-            phase.output_paths = output_paths
+            TargetIntegrator.set_input_output_paths(phase, input_paths_by_config, output_paths_by_config)
           end
 
           # Delete a 'Copy Pods Resources' script phase if present
@@ -135,21 +262,24 @@ module Pod
           # @param [PBXNativeTarget] native_target
           #        The native target to add the script phase into.
           #
-          # @param [String] phase_name
-          #        The name of the phase to use.
+          # @param [String] script_phase_name
+          #        The name of the script phase to use.
           #
-          # @param [Class] phase_class
-          #        The class of the phase to use.
+          # @param [String] show_env_vars_in_log
+          #        The value to set for show environment variables in the log during execution of this script phase or
+          #        `nil` for not setting the value at all.
           #
-          # @return [void]
+          # @return [PBXShellScriptBuildPhase] The existing or newly created shell script build phase.
           #
-          def create_or_update_build_phase(native_target, phase_name, phase_class = Xcodeproj::Project::Object::PBXShellScriptBuildPhase)
-            build_phases = native_target.build_phases.grep(phase_class)
-            build_phases.find { |phase| phase.name && phase.name.end_with?(phase_name) }.tap { |p| p.name = phase_name if p } ||
-              native_target.project.new(phase_class).tap do |phase|
-                UI.message("Adding Build Phase '#{phase_name}' to project.") do
-                  phase.name = phase_name
-                  phase.show_env_vars_in_log = '0'
+          def create_or_update_shell_script_build_phase(native_target, script_phase_name, show_env_vars_in_log = '0')
+            build_phases = native_target.build_phases.grep(Xcodeproj::Project::Object::PBXShellScriptBuildPhase)
+            build_phases.find { |phase| phase.name && phase.name.end_with?(script_phase_name) }.tap { |p| p.name = script_phase_name if p } ||
+              native_target.project.new(Xcodeproj::Project::Object::PBXShellScriptBuildPhase).tap do |phase|
+                UI.message("Adding Build Phase '#{script_phase_name}' to project.") do
+                  phase.name = script_phase_name
+                  unless show_env_vars_in_log.nil?
+                    phase.show_env_vars_in_log = show_env_vars_in_log
+                  end
                   native_target.build_phases << phase
                 end
               end
@@ -163,7 +293,9 @@ module Pod
           def create_or_update_user_script_phases(script_phases, native_target)
             script_phase_names = script_phases.map { |k| k[:name] }
             # Delete script phases no longer present in the target.
-            native_target_script_phases = native_target.shell_script_build_phases.select { |bp| !bp.name.nil? && bp.name.start_with?(USER_BUILD_PHASE_PREFIX) }
+            native_target_script_phases = native_target.shell_script_build_phases.select do |bp|
+              !bp.name.nil? && bp.name.start_with?(USER_BUILD_PHASE_PREFIX)
+            end
             native_target_script_phases.each do |script_phase|
               script_phase_name_without_prefix = script_phase.name.sub(USER_BUILD_PHASE_PREFIX, '')
               unless script_phase_names.include?(script_phase_name_without_prefix)
@@ -173,28 +305,47 @@ module Pod
             # Create or update the ones that are expected to be.
             script_phases.each do |script_phase|
               name_with_prefix = USER_BUILD_PHASE_PREFIX + script_phase[:name]
-              phase = TargetIntegrator.create_or_update_build_phase(native_target, name_with_prefix)
+              phase = TargetIntegrator.create_or_update_shell_script_build_phase(native_target, name_with_prefix, nil)
               phase.shell_script = script_phase[:script]
-              phase.shell_path = script_phase[:shell_path] if script_phase.key?(:shell_path)
-              phase.input_paths = script_phase[:input_files] if script_phase.key?(:input_files)
-              phase.output_paths = script_phase[:output_files] if script_phase.key?(:output_files)
-              phase.show_env_vars_in_log = script_phase[:show_env_vars_in_log] ? '1' : '0' if script_phase.key?(:show_env_vars_in_log)
+              phase.shell_path = script_phase[:shell_path] || '/bin/sh'
+              phase.input_paths = script_phase[:input_files]
+              phase.output_paths = script_phase[:output_files]
+              phase.input_file_list_paths = script_phase[:input_file_lists]
+              phase.output_file_list_paths = script_phase[:output_file_lists]
+              phase.dependency_file = script_phase[:dependency_file]
+              # At least with Xcode 10 `showEnvVarsInLog` is *NOT* set to any value even if it's checked and it only
+              # gets set to '0' if the user has explicitly disabled this.
+              if (show_env_vars_in_log = script_phase.fetch(:show_env_vars_in_log, '1')) == '0'
+                phase.show_env_vars_in_log = show_env_vars_in_log
+              end
 
               execution_position = script_phase[:execution_position]
-              unless execution_position == :any
-                compile_build_phase_index = native_target.build_phases.index do |bp|
-                  bp.is_a?(Xcodeproj::Project::Object::PBXSourcesBuildPhase)
-                end
-                unless compile_build_phase_index.nil?
-                  script_phase_index = native_target.build_phases.index do |bp|
-                    bp.is_a?(Xcodeproj::Project::Object::PBXShellScriptBuildPhase) && !bp.name.nil? && bp.name == name_with_prefix
-                  end
-                  if (execution_position == :before_compile && script_phase_index > compile_build_phase_index) ||
-                    (execution_position == :after_compile && script_phase_index < compile_build_phase_index)
-                    native_target.build_phases.move_from(script_phase_index, compile_build_phase_index)
-                  end
-                end
-              end
+              reorder_script_phase(native_target, phase, execution_position)
+            end
+          end
+
+          def reorder_script_phase(native_target, script_phase, execution_position)
+            return if execution_position == :any || execution_position.to_s.empty?
+            target_phase_type = Xcodeproj::Project::Object::PBXSourcesBuildPhase
+            order_before = case execution_position
+                           when :before_compile
+                             true
+                           when :after_compile
+                             false
+                           else
+                             raise ArgumentError, "Unknown execution position `#{execution_position}`"
+                           end
+
+            target_phase_index = native_target.build_phases.index do |bp|
+              bp.is_a?(target_phase_type)
+            end
+            return if target_phase_index.nil?
+            script_phase_index = native_target.build_phases.index do |bp|
+              bp.is_a?(Xcodeproj::Project::Object::PBXShellScriptBuildPhase) && !bp.name.nil? && bp.name == script_phase.name
+            end
+            if (order_before && script_phase_index > target_phase_index) ||
+              (!order_before && script_phase_index < target_phase_index)
+              native_target.build_phases.move_from(script_phase_index, target_phase_index)
             end
           end
 
@@ -217,27 +368,6 @@ module Pod
             end
           end
 
-          # Returns an extension in the target that corresponds to the
-          # resource's input extension.
-          #
-          # @param [String] input_extension
-          #        The input extension to map to.
-          #
-          # @return [String] The output extension.
-          #
-          def output_extension_for_resource(input_extension)
-            case input_extension
-            when '.storyboard'        then '.storyboardc'
-            when '.xib'               then '.nib'
-            when '.framework'         then '.framework'
-            when '.xcdatamodel'       then '.mom'
-            when '.xcdatamodeld'      then '.momd'
-            when '.xcmappingmodel'    then '.cdm'
-            when '.xcassets'          then '.car'
-            else                      input_extension
-            end
-          end
-
           # Returns the resource output paths for all given input paths.
           #
           # @param [Array<String>] resource_input_paths
@@ -250,9 +380,51 @@ module Pod
               base_path = '${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}'
               extname = File.extname(resource_input_path)
               basename = extname == '.xcassets' ? 'Assets' : File.basename(resource_input_path)
-              output_extension = TargetIntegrator.output_extension_for_resource(extname)
+              output_extension = Target.output_extension_for_resource(extname)
               File.join(base_path, File.basename(basename, extname) + output_extension)
             end.uniq
+          end
+
+          # Returns the framework input paths for the given framework paths
+          #
+          # @param  [Hash<Array<Xcode::FrameworkPaths>>] framework_paths
+          #         The target's framework paths to map to input paths.
+          #
+          # @param  [Hash<Array<XCFramework>>] xcframeworks
+          #         The target's xcframeworks to map to input paths.
+          #
+          # @return [Array<String>] The embed frameworks script input paths
+          #
+          def embed_frameworks_input_paths(framework_paths, xcframeworks)
+            input_paths = framework_paths.map(&:source_path)
+            # Only include dynamic xcframeworks as the input since we will not be copying static xcframework slices
+            xcframeworks.select { |xcf| xcf.build_type.dynamic_framework? }.each do |xcframework|
+              name = xcframework.name
+              input_paths << "#{Pod::Target::BuildSettings.xcframework_intermediate_dir(xcframework)}/#{name}.framework/#{name}"
+            end
+            input_paths
+          end
+
+          # Returns the framework output paths for the given framework paths
+          #
+          # @param  [Array<Xcode::FrameworkPaths>] framework_paths
+          #         The framework input paths to map to output paths.
+          #
+          # @param  [Array<XCFramework>] xcframeworks
+          #         The installed xcframeworks.
+          #
+          # @return [Array<String>] The embed framework script output paths
+          #
+          def embed_frameworks_output_paths(framework_paths, xcframeworks)
+            paths = framework_paths.map do |framework_path|
+              "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/#{File.basename(framework_path.source_path)}"
+            end.uniq
+            # Static xcframeworks are not copied to the build dir
+            # so only include dynamic artifacts that will be copied to the build folder
+            xcframework_paths = xcframeworks.select { |xcf| xcf.build_type.dynamic_framework? }.map do |xcframework|
+              "${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/#{xcframework.name}.framework"
+            end
+            paths + xcframework_paths
           end
         end
 
@@ -266,6 +438,7 @@ module Pod
           UI.section(integration_message) do
             XCConfigIntegrator.integrate(target, native_targets)
 
+            remove_obsolete_script_phases
             add_pods_library
             add_embed_frameworks_script_phase
             remove_embed_frameworks_script_phase_from_embedded_targets
@@ -297,22 +470,25 @@ module Pod
           frameworks = user_project.frameworks_group
           native_targets.each do |native_target|
             build_phase = native_target.frameworks_build_phase
+            product_name = target.product_name
 
-            # Find and delete possible reference for the other product type
-            old_product_name = target.requires_frameworks? ? target.static_library_name : target.framework_name
-            old_product_ref = frameworks.files.find { |f| f.path == old_product_name }
-            if old_product_ref.present?
-              UI.message("Removing old Pod product reference #{old_product_name} from project.")
-              build_phase.remove_file_reference(old_product_ref)
-              frameworks.remove_reference(old_product_ref)
+            # Delete previously integrated references.
+            product_build_files = build_phase.files.select do |build_file|
+              build_file.display_name =~ Pod::Deintegrator::FRAMEWORK_NAMES
+            end
+
+            product_build_files.each do |product_file|
+              next unless product_name != product_file.display_name
+              UI.message("Removing old product reference `#{product_file.display_name}` from project.")
+              frameworks.remove_reference(product_file.file_ref)
+              build_phase.remove_build_file(product_file)
             end
 
             # Find or create and add a reference for the current product type
-            target_basename = target.product_basename
-            new_product_ref = frameworks.files.find { |f| f.path == target.product_name } ||
-              frameworks.new_product_ref_for_target(target_basename, target.product_type)
+            new_product_ref = frameworks.files.find { |f| f.path == product_name } ||
+                frameworks.new_product_ref_for_target(target.product_basename, target.product_type)
             build_phase.build_file(new_product_ref) ||
-              build_phase.add_file_reference(new_product_ref, true)
+                build_phase.add_file_reference(new_product_ref, true)
           end
         end
 
@@ -329,16 +505,22 @@ module Pod
           end
 
           script_path = target.copy_resources_script_relative_path
-          resource_paths_by_config = target.resource_paths_by_config
-          resource_paths_flattened = resource_paths_by_config.values.flatten.uniq
-          input_paths = [target.copy_resources_script_relative_path, *resource_paths_flattened]
-          output_paths = TargetIntegrator.resource_output_paths(resource_paths_flattened)
-          TargetIntegrator.validate_input_output_path_limit(input_paths, output_paths)
+          input_paths_by_config = {}
+          output_paths_by_config = {}
+          if use_input_output_paths
+            target.resource_paths_by_config.each do |config, resource_paths|
+              input_paths_key = XCFileListConfigKey.new(target.copy_resources_script_input_files_path(config), target.copy_resources_script_input_files_relative_path)
+              input_paths_by_config[input_paths_key] = [script_path] + resource_paths
+
+              output_paths_key = XCFileListConfigKey.new(target.copy_resources_script_output_files_path(config), target.copy_resources_script_output_files_relative_path)
+              output_paths_by_config[output_paths_key] = TargetIntegrator.resource_output_paths(resource_paths)
+            end
+          end
 
           native_targets.each do |native_target|
             # Static library targets cannot include resources. Skip this phase from being added instead.
             next if native_target.symbol_type == :static_library
-            TargetIntegrator.create_or_update_copy_resources_script_phase_to_target(native_target, script_path, input_paths, output_paths)
+            TargetIntegrator.create_or_update_copy_resources_script_phase_to_target(native_target, script_path, input_paths_by_config, output_paths_by_config)
           end
         end
 
@@ -362,7 +544,7 @@ module Pod
         # @return [void]
         #
         def add_embed_frameworks_script_phase
-          unless target.includes_frameworks?
+          unless target.includes_frameworks? || (target.xcframeworks_by_config.values.flatten.any? { |xcf| xcf.build_type.dynamic_framework? })
             native_targets_to_embed_in.each do |native_target|
               TargetIntegrator.remove_embed_frameworks_script_phase_from_target(native_target)
             end
@@ -370,13 +552,24 @@ module Pod
           end
 
           script_path = target.embed_frameworks_script_relative_path
-          framework_paths_by_config = target.framework_paths_by_config.values.flatten.uniq
-          input_paths = [target.embed_frameworks_script_relative_path, *framework_paths_by_config.map { |fw| [fw[:input_path], fw[:dsym_input_path]] }.flatten.compact]
-          output_paths = framework_paths_by_config.map { |fw| [fw[:output_path], fw[:dsym_output_path]] }.flatten.compact.uniq
-          TargetIntegrator.validate_input_output_path_limit(input_paths, output_paths)
+          input_paths_by_config = {}
+          output_paths_by_config = {}
+          if use_input_output_paths?
+            configs = Set.new(target.framework_paths_by_config.keys + target.xcframeworks_by_config.keys).sort
+            configs.each do |config|
+              framework_paths = target.framework_paths_by_config[config] || []
+              xcframeworks = target.xcframeworks_by_config[config] || []
+
+              input_paths_key = XCFileListConfigKey.new(target.embed_frameworks_script_input_files_path(config), target.embed_frameworks_script_input_files_relative_path)
+              input_paths_by_config[input_paths_key] = [script_path] + TargetIntegrator.embed_frameworks_input_paths(framework_paths, xcframeworks)
+
+              output_paths_key = XCFileListConfigKey.new(target.embed_frameworks_script_output_files_path(config), target.embed_frameworks_script_output_files_relative_path)
+              output_paths_by_config[output_paths_key] = TargetIntegrator.embed_frameworks_output_paths(framework_paths, xcframeworks)
+            end
+          end
 
           native_targets_to_embed_in.each do |native_target|
-            TargetIntegrator.create_or_update_embed_frameworks_script_phase_to_target(native_target, script_path, input_paths, output_paths)
+            TargetIntegrator.create_or_update_embed_frameworks_script_phase_to_target(native_target, script_path, input_paths_by_config, output_paths_by_config)
           end
         end
 
@@ -403,7 +596,7 @@ module Pod
         def add_check_manifest_lock_script_phase
           phase_name = CHECK_MANIFEST_PHASE_NAME
           native_targets.each do |native_target|
-            phase = TargetIntegrator.create_or_update_build_phase(native_target, BUILD_PHASE_PREFIX + phase_name)
+            phase = TargetIntegrator.create_or_update_shell_script_build_phase(native_target, BUILD_PHASE_PREFIX + phase_name)
             native_target.build_phases.unshift(phase).uniq! unless native_target.build_phases.first == phase
             phase.shell_script = <<-SH.strip_heredoc
               diff "${PODS_PODFILE_DIR_PATH}/Podfile.lock" "${PODS_ROOT}/Manifest.lock" > /dev/null
@@ -417,6 +610,17 @@ module Pod
             SH
             phase.input_paths = %w(${PODS_PODFILE_DIR_PATH}/Podfile.lock ${PODS_ROOT}/Manifest.lock)
             phase.output_paths = [target.check_manifest_lock_script_output_file_path]
+          end
+        end
+
+        # @param [Array<String>] removed_phase_names
+        #        The names of the script phases that should be removed
+        #
+        def remove_obsolete_script_phases(removed_phase_names = REMOVED_SCRIPT_PHASE_NAMES)
+          native_targets.each do |native_target|
+            removed_phase_names.each do |phase_name|
+              TargetIntegrator.remove_script_phase_from_target(native_target, phase_name)
+            end
           end
         end
 

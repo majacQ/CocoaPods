@@ -23,12 +23,20 @@ CDN_REPO_RESPONSE = '---
             - 1'.freeze
 
 def stub_url_as_cdn(url)
+  <<<<<<< test-open-uri
+  WebMock.stub_request(:get, URI.join(url, 'CocoaPods-version.yml')).
+  =======
   WebMock.stub_request(:get, url.chomp('/') + '/CocoaPods-version.yml').
+  >>>>>>> master
     to_return(:status => 200, :headers => {}, :body => CDN_REPO_RESPONSE)
 end
 
 def stub_as_404(url)
+  <<<<<<< test-open-uri
+  WebMock.stub_request(:get, URI.join(url, 'CocoaPods-version.yml')).
+  =======
   WebMock.stub_request(:get, url.chomp('/') + '/CocoaPods-version.yml').
+  >>>>>>> master
     to_return(:status => 404, :headers => {}, :body => '')
 end
 

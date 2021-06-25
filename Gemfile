@@ -39,7 +39,6 @@ group :development do
   gem 'mocha-on-bacon'
   gem 'netrc'
   gem 'prettybacon'
-  gem 'typhoeus'
   gem 'webmock'
 
   gem 'bigdecimal', '~> 1.3.0'

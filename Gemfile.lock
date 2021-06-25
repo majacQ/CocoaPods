@@ -275,7 +275,11 @@ GEM
     tzinfo (1.2.9)
       thread_safe (~> 0.1)
     unicode-display_width (1.7.0)
+  <<<<<<< test-open-uri
+    webmock (3.11.0)
+  =======
     webmock (3.11.1)
+  >>>>>>> master
       addressable (>= 2.3.6)
       crack (>= 0.3.2)
       hashdiff (>= 0.4.0, < 2.0.0)
@@ -319,7 +323,6 @@ DEPENDENCIES
   ruby-graphviz (< 1.2.5)
   ruby-prof
   simplecov (< 0.18)
-  typhoeus
   webmock
   xcodeproj!
 

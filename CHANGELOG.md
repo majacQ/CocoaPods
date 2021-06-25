@@ -8,6 +8,10 @@ To install release candidates run `[sudo] gem install cocoapods --pre`
 
 ##### Enhancements
 
+  <<<<<<< test-open-uri
+* Remove dependency of `typhoeus`
+  [Jun Jiang](https://github.com/jasl)
+  =======
 * Improve compatibility with ActiveSupport 6  
   [Jun Jiang](https://github.com/jasl)
   [#10364](https://github.com/CocoaPods/CocoaPods/pull/10364)
@@ -18,6 +22,7 @@ To install release candidates run `[sudo] gem install cocoapods --pre`
 
 * Rewrite the only place dependent on `typhoeus`.  
   [Jun Jiang](https://github.com/jasl), [Igor Makarov](https://github.com/igor-makarov)
+  >>>>>>> master
   [#10346](https://github.com/CocoaPods/CocoaPods/pull/10346)
 
 * Add a `--update-sources` option to `pod repo push` so one can ensure sources are up-to-date. 
